@@ -38,6 +38,50 @@ export interface TaxableIncomeResult {
   }
 }
 
+export interface ShareSaleEvent {
+  saleDate: string
+  sharesSold: number
+  salePricePerShare: number
+  currency: 'USD' | 'AUD'
+  exchangeRate?: number // Required for USD sales
+  brokerageCommission?: number
+  supplementalFees?: number
+}
+
+export interface CapitalGainsResult {
+  capitalGain: number // Positive for gain, negative for loss
+  isGain: boolean
+  costBase: number
+  saleProceeds: number
+  netProceeds: number // Sale proceeds minus fees
+  currency: string
+  appliedRule: '30-day' | 'standard-cgt' | 'none'
+  calculation: {
+    grossProceeds: number
+    totalFees: number
+    costBase: number
+    sharesSold: number
+    salePricePerShare: number
+  }
+}
+
+export interface ThirtyDayRuleResult {
+  applies: boolean
+  daysBetween: number
+  vestingDate: string
+  saleDate: string
+  reason: string
+}
+
+export interface CombinedTaxResult {
+  taxableIncome: number
+  capitalGain: number
+  thirtyDayRuleApplied: boolean
+  currency: string
+  vestingResult: TaxableIncomeResult | null
+  saleResult: CapitalGainsResult
+}
+
 /**
  * Calculates taxable income from RSU vesting
  * Formula: Taxable Income = Market Value of Shares at Vesting - Cost Base
@@ -171,4 +215,212 @@ export function convertShareEventValue(
   throw new Error(
     `Conversion from ${sourceCurrency} to ${targetCurrency} not supported`
   )
+}
+
+/**
+ * Determines if the 30-day rule applies to a share sale
+ * Rule: If shares are sold within 30 days of vesting, the sale date becomes the taxing point
+ */
+export function checkThirtyDayRule(
+  vestingDate: string,
+  saleDate: string
+): ThirtyDayRuleResult {
+  const vestDate = new Date(vestingDate)
+  const saleDateTime = new Date(saleDate)
+
+  // Validate date order
+  if (saleDateTime < vestDate) {
+    throw new Error('Sale date cannot be before vesting date')
+  }
+
+  // Calculate the difference in days
+  const timeDifference = saleDateTime.getTime() - vestDate.getTime()
+  const daysBetween = Math.floor(timeDifference / (1000 * 3600 * 24))
+
+  const applies = daysBetween <= 30
+  const reason = applies
+    ? `Sale occurred within 30 days of vesting (${daysBetween} days)`
+    : `Sale occurred after 30-day period (${daysBetween} days)`
+
+  return {
+    applies,
+    daysBetween,
+    vestingDate,
+    saleDate,
+    reason,
+  }
+}
+
+/**
+ * Calculates capital gains/losses from share sale
+ * Formula: Capital Gain = Sale Proceeds - Cost Base - Fees
+ *
+ * @param saleEvent - Details of the share sale
+ * @param costBase - Cost basis from vesting (market value at vest in AUD)
+ */
+export function calculateCapitalGains(
+  saleEvent: ShareSaleEvent,
+  costBase: number
+): CapitalGainsResult {
+  const {
+    sharesSold,
+    salePricePerShare,
+    currency,
+    exchangeRate,
+    brokerageCommission = 0,
+    supplementalFees = 0,
+  } = saleEvent
+
+  // Validate USD sales have exchange rate
+  if (currency === 'USD' && !exchangeRate) {
+    throw new Error('Exchange rate required for USD sales')
+  }
+
+  // Calculate gross proceeds in original currency
+  const grossProceeds = sharesSold * salePricePerShare
+  const totalFees = brokerageCommission + supplementalFees
+
+  // Convert to AUD if needed
+  let saleProceedsAud: number
+  let totalFeesAud: number
+
+  if (currency === 'USD' && exchangeRate) {
+    // Convert USD to AUD
+    saleProceedsAud = Math.round((grossProceeds / exchangeRate) * 100) / 100
+    totalFeesAud = Math.round((totalFees / exchangeRate) * 100) / 100
+  } else {
+    saleProceedsAud = grossProceeds
+    totalFeesAud = totalFees
+  }
+
+  // Calculate net proceeds and capital gain
+  const netProceeds = saleProceedsAud - totalFeesAud
+  const capitalGain = netProceeds - costBase
+
+  return {
+    capitalGain: Math.round(capitalGain * 100) / 100,
+    isGain: capitalGain > 0,
+    costBase,
+    saleProceeds: saleProceedsAud,
+    netProceeds: Math.round(netProceeds * 100) / 100,
+    currency: 'AUD',
+    appliedRule: 'standard-cgt',
+    calculation: {
+      grossProceeds: currency === 'USD' ? grossProceeds : saleProceedsAud,
+      totalFees: currency === 'USD' ? totalFees : totalFeesAud,
+      costBase,
+      sharesSold,
+      salePricePerShare,
+    },
+  }
+}
+
+/**
+ * Processes a vesting event followed by a sale, applying 30-day rule if applicable
+ * This is the main function that combines vesting income and sale calculations
+ *
+ * @param vestingEvent - The RSU vesting event
+ * @param saleEvent - The subsequent share sale event
+ */
+export function processVestingAndSale(
+  vestingEvent: VestingEvent,
+  saleEvent: ShareSaleEvent
+): CombinedTaxResult {
+  // Validate share quantities
+  if (saleEvent.sharesSold > vestingEvent.sharesVested) {
+    throw new Error(
+      `Cannot sell more shares (${saleEvent.sharesSold}) than were vested (${vestingEvent.sharesVested})`
+    )
+  }
+
+  // Check if 30-day rule applies
+  const thirtyDayRule = checkThirtyDayRule(
+    vestingEvent.vestDate,
+    saleEvent.saleDate
+  )
+
+  if (thirtyDayRule.applies) {
+    // 30-day rule: Sale date becomes taxing point, no separate vesting income
+    // Taxable income = Sale proceeds - cost base - fees (all in AUD)
+
+    // Convert sale proceeds to AUD
+    const { sharesSold, salePricePerShare, currency, exchangeRate } = saleEvent
+    const brokerageCommission = saleEvent.brokerageCommission || 0
+    const supplementalFees = saleEvent.supplementalFees || 0
+
+    // Validate USD conversion requirements
+    if (currency === 'USD' && !exchangeRate) {
+      throw new Error(
+        'Exchange rate required for USD sales in 30-day rule calculation'
+      )
+    }
+
+    let grossProceedsAud: number
+    let totalFeesAud: number
+
+    if (currency === 'USD' && exchangeRate) {
+      const grossProceeds = sharesSold * salePricePerShare
+      const totalFees = brokerageCommission + supplementalFees
+      grossProceedsAud = Math.round((grossProceeds / exchangeRate) * 100) / 100
+      totalFeesAud = Math.round((totalFees / exchangeRate) * 100) / 100
+    } else {
+      grossProceedsAud = sharesSold * salePricePerShare
+      totalFeesAud = brokerageCommission + supplementalFees
+    }
+
+    const costBase = vestingEvent.costBase || 0
+    const taxableIncome = grossProceedsAud - costBase - totalFeesAud
+
+    return {
+      taxableIncome: Math.round(taxableIncome * 100) / 100,
+      capitalGain: 0, // No separate capital gain with 30-day rule
+      thirtyDayRuleApplied: true,
+      currency: 'AUD',
+      vestingResult: null, // No separate vesting result
+      saleResult: {
+        capitalGain: 0,
+        isGain: false,
+        costBase,
+        saleProceeds: grossProceedsAud,
+        netProceeds: grossProceedsAud - totalFeesAud,
+        currency: 'AUD',
+        appliedRule: '30-day',
+        calculation: {
+          grossProceeds:
+            currency === 'USD'
+              ? sharesSold * salePricePerShare
+              : grossProceedsAud,
+          totalFees:
+            currency === 'USD'
+              ? brokerageCommission + supplementalFees
+              : totalFeesAud,
+          costBase,
+          sharesSold,
+          salePricePerShare,
+        },
+      },
+    }
+  } else {
+    // Standard CGT: Separate vesting income and capital gains
+
+    // Calculate vesting taxable income
+    const vestingResult = calculateRsuVestingTaxableIncome(vestingEvent)
+
+    // Calculate cost base for the sold shares (proportional)
+    const vestingValuePerShare =
+      vestingResult.taxableIncome / vestingEvent.sharesVested
+    const costBaseForSoldShares = vestingValuePerShare * saleEvent.sharesSold
+
+    // Calculate capital gains
+    const saleResult = calculateCapitalGains(saleEvent, costBaseForSoldShares)
+
+    return {
+      taxableIncome: vestingResult.taxableIncome, // Full vesting income (even for partial sales)
+      capitalGain: saleResult.capitalGain,
+      thirtyDayRuleApplied: false,
+      currency: 'AUD',
+      vestingResult,
+      saleResult,
+    }
+  }
 }
