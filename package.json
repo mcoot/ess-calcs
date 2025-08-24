@@ -1,0 +1,69 @@
+{
+  "name": "ess-calcs",
+  "version": "1.0.0",
+  "description": "ESS scheme tax calculation utilities",
+  "type": "module",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "lint:fix": "next lint --fix",
+    "type-check": "tsc --noEmit",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prepare": "husky"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mcoot/ess-calcs.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/mcoot/ess-calcs/issues"
+  },
+  "homepage": "https://github.com/mcoot/ess-calcs#readme",
+  "dependencies": {
+    "next": "^15.5.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.8.0",
+    "@testing-library/react": "^16.3.0",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.3.0",
+    "@types/react": "^19.1.11",
+    "@types/react-dom": "^19.1.7",
+    "@typescript-eslint/eslint-plugin": "^8.40.0",
+    "@typescript-eslint/parser": "^8.40.0",
+    "eslint": "^9.34.0",
+    "eslint-config-next": "^15.5.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.4",
+    "husky": "^9.1.7",
+    "jest": "^30.0.5",
+    "jest-environment-jsdom": "^30.0.5",
+    "lint-staged": "^16.1.5",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2"
+  },
+  "lint-staged": {
+    "*.{js,jsx,ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,css,md}": [
+      "prettier --write"
+    ]
+  }
+}
