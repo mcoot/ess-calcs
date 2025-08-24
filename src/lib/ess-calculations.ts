@@ -46,6 +46,7 @@ export interface ShareSaleEvent {
   exchangeRate?: number // Required for USD sales
   brokerageCommission?: number
   supplementalFees?: number
+  acquisitionDate?: string // Required for CGT discount calculation
 }
 
 export interface CapitalGainsResult {
@@ -56,6 +57,13 @@ export interface CapitalGainsResult {
   netProceeds: number // Sale proceeds minus fees
   currency: string
   appliedRule: '30-day' | 'standard-cgt' | 'none'
+  cgtDiscount: {
+    eligible: boolean
+    holdingPeriodDays: number
+    discountRate: number
+    grossCapitalGain: number
+    discountedCapitalGain: number
+  }
   calculation: {
     grossProceeds: number
     totalFees: number
@@ -218,6 +226,49 @@ export function convertShareEventValue(
 }
 
 /**
+ * Calculates CGT discount for long-term holdings
+ * Rule: 50% discount applies if held for more than 12 months (365 days)
+ */
+export function calculateCgtDiscount(
+  acquisitionDate: string,
+  saleDate: string,
+  grossCapitalGain: number
+): {
+  eligible: boolean
+  holdingPeriodDays: number
+  discountRate: number
+  grossCapitalGain: number
+  discountedCapitalGain: number
+} {
+  const acquisitionDateTime = new Date(acquisitionDate)
+  const saleDateTime = new Date(saleDate)
+
+  // Validate date order
+  if (saleDateTime < acquisitionDateTime) {
+    throw new Error('Sale date cannot be before acquisition date')
+  }
+
+  // Calculate holding period in days
+  const timeDifference = saleDateTime.getTime() - acquisitionDateTime.getTime()
+  const holdingPeriodDays = Math.floor(timeDifference / (1000 * 3600 * 24))
+
+  // CGT discount applies if held for more than 365 days (12 months)
+  const eligible = holdingPeriodDays > 365
+
+  // Only apply discount to capital gains (not losses)
+  const discountRate = eligible && grossCapitalGain > 0 ? 0.5 : 0
+  const discountedCapitalGain = grossCapitalGain * (1 - discountRate)
+
+  return {
+    eligible,
+    holdingPeriodDays,
+    discountRate,
+    grossCapitalGain,
+    discountedCapitalGain: Math.round(discountedCapitalGain * 100) / 100,
+  }
+}
+
+/**
  * Determines if the 30-day rule applies to a share sale
  * Rule: If shares are sold within 30 days of vesting, the sale date becomes the taxing point
  */
@@ -257,10 +308,12 @@ export function checkThirtyDayRule(
  *
  * @param saleEvent - Details of the share sale
  * @param costBase - Cost basis from vesting (market value at vest in AUD)
+ * @param acquisitionDate - Date shares were acquired (for CGT discount calculation)
  */
 export function calculateCapitalGains(
   saleEvent: ShareSaleEvent,
-  costBase: number
+  costBase: number,
+  acquisitionDate?: string
 ): CapitalGainsResult {
   const {
     sharesSold,
@@ -295,16 +348,47 @@ export function calculateCapitalGains(
 
   // Calculate net proceeds and capital gain
   const netProceeds = saleProceedsAud - totalFeesAud
-  const capitalGain = netProceeds - costBase
+  const grossCapitalGain = netProceeds - costBase
+
+  // Calculate CGT discount if acquisition date provided
+  let cgtDiscount: {
+    eligible: boolean
+    holdingPeriodDays: number
+    discountRate: number
+    grossCapitalGain: number
+    discountedCapitalGain: number
+  }
+
+  const effectiveAcquisitionDate = acquisitionDate || saleEvent.acquisitionDate
+
+  if (effectiveAcquisitionDate) {
+    cgtDiscount = calculateCgtDiscount(
+      effectiveAcquisitionDate,
+      saleEvent.saleDate,
+      grossCapitalGain
+    )
+  } else {
+    // No acquisition date provided, no discount applied
+    cgtDiscount = {
+      eligible: false,
+      holdingPeriodDays: 0,
+      discountRate: 0,
+      grossCapitalGain,
+      discountedCapitalGain: grossCapitalGain,
+    }
+  }
+
+  const finalCapitalGain = cgtDiscount.discountedCapitalGain
 
   return {
-    capitalGain: Math.round(capitalGain * 100) / 100,
-    isGain: capitalGain > 0,
+    capitalGain: Math.round(finalCapitalGain * 100) / 100,
+    isGain: finalCapitalGain > 0,
     costBase,
     saleProceeds: saleProceedsAud,
     netProceeds: Math.round(netProceeds * 100) / 100,
     currency: 'AUD',
     appliedRule: 'standard-cgt',
+    cgtDiscount,
     calculation: {
       grossProceeds: currency === 'USD' ? grossProceeds : saleProceedsAud,
       totalFees: currency === 'USD' ? totalFees : totalFeesAud,
@@ -385,6 +469,13 @@ export function processVestingAndSale(
         netProceeds: grossProceedsAud - totalFeesAud,
         currency: 'AUD',
         appliedRule: '30-day',
+        cgtDiscount: {
+          eligible: false,
+          holdingPeriodDays: 0,
+          discountRate: 0,
+          grossCapitalGain: 0,
+          discountedCapitalGain: 0,
+        },
         calculation: {
           grossProceeds:
             currency === 'USD'
@@ -411,8 +502,12 @@ export function processVestingAndSale(
       vestingResult.taxableIncome / vestingEvent.sharesVested
     const costBaseForSoldShares = vestingValuePerShare * saleEvent.sharesSold
 
-    // Calculate capital gains
-    const saleResult = calculateCapitalGains(saleEvent, costBaseForSoldShares)
+    // Calculate capital gains (using vesting date as acquisition date)
+    const saleResult = calculateCapitalGains(
+      saleEvent,
+      costBaseForSoldShares,
+      vestingEvent.vestDate
+    )
 
     return {
       taxableIncome: vestingResult.taxableIncome, // Full vesting income (even for partial sales)

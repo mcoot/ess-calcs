@@ -5,6 +5,7 @@ import {
   checkThirtyDayRule,
   calculateCapitalGains,
   processVestingAndSale,
+  calculateCgtDiscount,
   type VestingEvent,
   type TaxableIncomeResult,
   type ShareSaleEvent,
@@ -371,6 +372,13 @@ describe('ESS Calculations', () => {
         netProceeds: 17470, // 17500 - 30
         currency: 'AUD',
         appliedRule: 'standard-cgt',
+        cgtDiscount: {
+          eligible: false,
+          holdingPeriodDays: 0,
+          discountRate: 0,
+          grossCapitalGain: 4970,
+          discountedCapitalGain: 4970,
+        },
         calculation: {
           grossProceeds: 17500,
           totalFees: 30,
@@ -610,6 +618,254 @@ describe('ESS Calculations', () => {
       // Partial CGT: (100 × $70) - (100 × $50) = $2,000
       expect(result.capitalGain).toBe(2000)
       expect(result.saleResult.calculation.sharesSold).toBe(100)
+    })
+  })
+
+  describe('calculateCgtDiscount', () => {
+    it('should apply 50% discount for holdings > 365 days with capital gain', () => {
+      const result = calculateCgtDiscount(
+        '2023-06-01', // Acquisition
+        '2024-12-01', // Sale (18 months later)
+        5000 // Capital gain
+      )
+
+      expect(result.eligible).toBe(true)
+      expect(result.holdingPeriodDays).toBeGreaterThan(365) // 18 months is definitely > 365 days
+      expect(result.discountRate).toBe(0.5)
+      expect(result.grossCapitalGain).toBe(5000)
+      expect(result.discountedCapitalGain).toBe(2500) // 50% discount applied
+    })
+
+    it('should NOT apply discount for holdings <= 365 days', () => {
+      const result = calculateCgtDiscount(
+        '2024-06-01', // Acquisition
+        '2024-12-01', // Sale (6 months later)
+        3000 // Capital gain
+      )
+
+      expect(result).toEqual({
+        eligible: false,
+        holdingPeriodDays: 183, // 6 months
+        discountRate: 0,
+        grossCapitalGain: 3000,
+        discountedCapitalGain: 3000, // No discount applied
+      })
+    })
+
+    it('should NOT apply discount for capital losses (even if held > 365 days)', () => {
+      const result = calculateCgtDiscount(
+        '2023-01-01',
+        '2024-06-01', // 17 months later
+        -2000 // Capital loss
+      )
+
+      expect(result).toEqual({
+        eligible: true, // Eligible based on time, but...
+        holdingPeriodDays: 517,
+        discountRate: 0, // No discount for losses
+        grossCapitalGain: -2000,
+        discountedCapitalGain: -2000, // Loss unchanged
+      })
+    })
+
+    it('should handle exactly 365 days (no discount)', () => {
+      const result = calculateCgtDiscount(
+        '2024-01-01',
+        '2024-12-31', // Exactly 365 days
+        1000
+      )
+
+      expect(result).toEqual({
+        eligible: false, // Must be > 365 days
+        holdingPeriodDays: 365,
+        discountRate: 0,
+        grossCapitalGain: 1000,
+        discountedCapitalGain: 1000,
+      })
+    })
+
+    it('should handle 366 days (discount applies)', () => {
+      const result = calculateCgtDiscount(
+        '2024-01-01',
+        '2025-01-01', // 366 days
+        2000
+      )
+
+      expect(result).toEqual({
+        eligible: true,
+        holdingPeriodDays: 366,
+        discountRate: 0.5,
+        grossCapitalGain: 2000,
+        discountedCapitalGain: 1000,
+      })
+    })
+
+    it('should handle scenario from documentation (18 months holding)', () => {
+      // From docs: Sarah holds shares for 18 months
+      // Vested: 1 June 2023, Sale: 1 December 2024
+      // Capital gain: $5,000, 50% discount = $2,500
+      const result = calculateCgtDiscount('2023-06-01', '2024-12-01', 5000)
+
+      expect(result.eligible).toBe(true)
+      expect(result.holdingPeriodDays).toBeGreaterThan(365)
+      expect(result.discountRate).toBe(0.5)
+      expect(result.discountedCapitalGain).toBe(2500)
+    })
+
+    it('should handle fractional gains with proper rounding', () => {
+      const result = calculateCgtDiscount(
+        '2023-01-01',
+        '2024-06-01',
+        3333.33 // Will result in $1666.665 after discount
+      )
+
+      expect(result.discountedCapitalGain).toBe(1666.67) // Rounded to 2 decimals
+    })
+
+    it('should throw error for invalid date order', () => {
+      expect(() =>
+        calculateCgtDiscount('2025-01-01', '2024-01-01', 1000)
+      ).toThrow('Sale date cannot be before acquisition date')
+    })
+
+    it('should handle same day acquisition and sale', () => {
+      const result = calculateCgtDiscount('2024-01-01', '2024-01-01', 1000)
+
+      expect(result).toEqual({
+        eligible: false,
+        holdingPeriodDays: 0,
+        discountRate: 0,
+        grossCapitalGain: 1000,
+        discountedCapitalGain: 1000,
+      })
+    })
+  })
+
+  describe('Capital Gains with CGT Discount Integration', () => {
+    it('should calculate capital gains with 50% discount for long-term holdings', () => {
+      const saleEvent: ShareSaleEvent = {
+        saleDate: '2024-12-01',
+        sharesSold: 250,
+        salePricePerShare: 70,
+        currency: 'AUD',
+        brokerageCommission: 25,
+        acquisitionDate: '2023-06-01', // 18 months ago
+      }
+
+      const result = calculateCapitalGains(saleEvent, 12500)
+
+      // Expected: (250 × $70) - $12,500 - $25 = $4,975
+      // With 50% discount: $4,975 × 50% = $2,487.50
+      expect(result.capitalGain).toBe(2487.5)
+      expect(result.cgtDiscount.eligible).toBe(true)
+      expect(result.cgtDiscount.discountRate).toBe(0.5)
+      expect(result.cgtDiscount.grossCapitalGain).toBe(4975)
+      expect(result.cgtDiscount.discountedCapitalGain).toBe(2487.5)
+    })
+
+    it('should NOT apply discount for short-term holdings', () => {
+      const saleEvent: ShareSaleEvent = {
+        saleDate: '2024-12-01',
+        sharesSold: 100,
+        salePricePerShare: 60,
+        currency: 'AUD',
+        acquisitionDate: '2024-06-01', // 6 months ago
+      }
+
+      const result = calculateCapitalGains(saleEvent, 5000)
+
+      expect(result.capitalGain).toBe(1000) // No discount
+      expect(result.cgtDiscount.eligible).toBe(false)
+      expect(result.cgtDiscount.discountRate).toBe(0)
+    })
+
+    it('should handle CGT discount with USD conversion', () => {
+      const saleEvent: ShareSaleEvent = {
+        saleDate: '2026-06-15',
+        sharesSold: 600,
+        salePricePerShare: 40, // USD
+        currency: 'USD',
+        exchangeRate: 0.62, // USD/AUD
+        acquisitionDate: '2024-01-01', // > 2 years ago
+      }
+
+      // Cost base from doc example: AUD $29,389
+      const result = calculateCapitalGains(saleEvent, 29389)
+
+      // USD $24,000 ÷ 0.62 = AUD $38,709.68 (precise)
+      // Capital gain: AUD $38,709.68 - AUD $29,389 = AUD $9,320.68
+      // 50% discount: AUD $9,320.68 × 50% = AUD $4,660.34
+      expect(result.capitalGain).toBeCloseTo(4660.34, 1)
+      expect(result.cgtDiscount.eligible).toBe(true)
+      expect(result.cgtDiscount.discountRate).toBe(0.5)
+    })
+
+    it('should handle capital losses without discount', () => {
+      const saleEvent: ShareSaleEvent = {
+        saleDate: '2025-12-01',
+        sharesSold: 100,
+        salePricePerShare: 30, // Lower than cost base
+        currency: 'AUD',
+        acquisitionDate: '2023-06-01', // Long-term holding
+      }
+
+      const result = calculateCapitalGains(saleEvent, 5000)
+
+      expect(result.capitalGain).toBe(-2000) // Loss unchanged
+      expect(result.cgtDiscount.eligible).toBe(true) // Time-wise eligible
+      expect(result.cgtDiscount.discountRate).toBe(0) // But no discount for losses
+      expect(result.cgtDiscount.discountedCapitalGain).toBe(-2000)
+    })
+  })
+
+  describe('Vesting and Sale with CGT Discount Integration', () => {
+    it('should apply CGT discount in processVestingAndSale for long-term holdings', () => {
+      const vestingEvent: VestingEvent = {
+        vestDate: '2023-06-01',
+        sharePrice: 50,
+        sharesVested: 250,
+        costBase: 0,
+        currency: 'AUD',
+      }
+
+      const saleEvent: ShareSaleEvent = {
+        saleDate: '2024-12-01', // 18 months later
+        sharesSold: 250,
+        salePricePerShare: 70,
+        currency: 'AUD',
+        brokerageCommission: 25,
+      }
+
+      const result = processVestingAndSale(vestingEvent, saleEvent)
+
+      expect(result.taxableIncome).toBe(12500) // Vesting income unchanged
+      expect(result.capitalGain).toBe(2487.5) // 50% discount applied to $4,975 gain
+      expect(result.thirtyDayRuleApplied).toBe(false)
+      expect(result.saleResult.cgtDiscount.eligible).toBe(true)
+      expect(result.saleResult.cgtDiscount.discountRate).toBe(0.5)
+    })
+
+    it('should NOT apply CGT discount for 30-day rule scenarios', () => {
+      const vestingEvent: VestingEvent = {
+        vestDate: '2025-06-01',
+        sharePrice: 50,
+        sharesVested: 200,
+        currency: 'AUD',
+      }
+
+      const saleEvent: ShareSaleEvent = {
+        saleDate: '2025-06-15', // 14 days later - 30-day rule applies
+        sharesSold: 200,
+        salePricePerShare: 60,
+        currency: 'AUD',
+      }
+
+      const result = processVestingAndSale(vestingEvent, saleEvent)
+
+      expect(result.thirtyDayRuleApplied).toBe(true)
+      expect(result.capitalGain).toBe(0) // No separate CGT with 30-day rule
+      expect(result.saleResult.cgtDiscount.eligible).toBe(false)
+      expect(result.saleResult.cgtDiscount.discountRate).toBe(0)
     })
   })
 })
