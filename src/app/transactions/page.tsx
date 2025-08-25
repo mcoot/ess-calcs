@@ -28,6 +28,8 @@ export default function TransactionsPage() {
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
   const [selectedTransaction, setSelectedTransaction] =
     useState<CombinedTransaction | null>(null)
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
 
   useEffect(() => {
     const importedData = loadImportedData()
@@ -84,6 +86,24 @@ export default function TransactionsPage() {
       )
     }
 
+    // Apply date range filter
+    if (dateFrom || dateTo) {
+      filtered = filtered.filter((t) => {
+        const transactionDate = new Date(t.date)
+        const fromDate = dateFrom ? new Date(dateFrom) : null
+        const toDate = dateTo ? new Date(dateTo) : null
+
+        if (fromDate && toDate) {
+          return transactionDate >= fromDate && transactionDate <= toDate
+        } else if (fromDate) {
+          return transactionDate >= fromDate
+        } else if (toDate) {
+          return transactionDate <= toDate
+        }
+        return true
+      })
+    }
+
     // Apply sorting
     filtered.sort((a, b) => {
       let aValue: any, bValue: any
@@ -116,7 +136,15 @@ export default function TransactionsPage() {
     })
 
     return filtered
-  }, [combinedTransactions, filter, searchTerm, sortField, sortDirection])
+  }, [
+    combinedTransactions,
+    filter,
+    searchTerm,
+    sortField,
+    sortDirection,
+    dateFrom,
+    dateTo,
+  ])
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -137,6 +165,18 @@ export default function TransactionsPage() {
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-AU')
+  }
+
+  const clearDateFilters = () => {
+    setDateFrom('')
+    setDateTo('')
+  }
+
+  const clearAllFilters = () => {
+    setFilter('all')
+    setSearchTerm('')
+    setDateFrom('')
+    setDateTo('')
   }
 
   if (isLoading) {
@@ -183,32 +223,79 @@ export default function TransactionsPage() {
 
         {/* Filters and Search */}
         <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 mb-6">
-          <div className="flex flex-col md:flex-row gap-4">
-            <div className="flex-1">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Search transactions
-              </label>
-              <input
-                type="text"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Search by description, ID, or currency..."
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+          <div className="space-y-4">
+            {/* First row: Search and Transaction Type */}
+            <div className="flex flex-col md:flex-row gap-4">
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Search transactions
+                </label>
+                <input
+                  type="text"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="Search by description, ID, or currency..."
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Transaction Type
+                </label>
+                <select
+                  value={filter}
+                  onChange={(e) => setFilter(e.target.value as TransactionType)}
+                  className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="all">All Transactions</option>
+                  <option value="sales">Share Sales</option>
+                  <option value="vesting">Vesting Events</option>
+                </select>
+              </div>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Transaction Type
-              </label>
-              <select
-                value={filter}
-                onChange={(e) => setFilter(e.target.value as TransactionType)}
-                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="all">All Transactions</option>
-                <option value="sales">Share Sales</option>
-                <option value="vesting">Vesting Events</option>
-              </select>
+
+            {/* Second row: Date Range Filter */}
+            <div className="flex flex-col md:flex-row gap-4 items-end">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  From Date
+                </label>
+                <input
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                  className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  To Date
+                </label>
+                <input
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div className="flex gap-2">
+                {(dateFrom || dateTo) && (
+                  <button
+                    onClick={clearDateFilters}
+                    className="px-3 py-2 text-sm text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
+                  >
+                    Clear Dates
+                  </button>
+                )}
+                {(filter !== 'all' || searchTerm || dateFrom || dateTo) && (
+                  <button
+                    onClick={clearAllFilters}
+                    className="px-3 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors"
+                  >
+                    Clear All
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>
