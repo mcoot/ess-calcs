@@ -56,8 +56,9 @@ export function detectCsvType(headers: string[]): CsvFileType {
     normalizedHeaders.some((header) => header.includes(marker))
   ).length
 
-  if (salesMatches >= 3) return 'sales'
+  // RSU releases have priority if they have strong markers, even if sales markers are present
   if (rsuReleaseMatches >= 3) return 'rsu-releases'
+  if (salesMatches >= 3) return 'sales'
   if (vestingMatches >= 3) return 'vesting'
   return 'unknown'
 }

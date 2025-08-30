@@ -3,6 +3,7 @@ import {
   parseCsvText,
   parseShareSalesCsv,
   parseVestingScheduleCsv,
+  parseRsuReleasesCsv,
   parseAnyCsv,
 } from '@/lib/csv-parser'
 
@@ -31,6 +32,36 @@ describe('CSV Parser', () => {
       ]
 
       expect(detectCsvType(vestingHeaders)).toBe('vesting')
+    })
+
+    it('should detect RSU release CSV type', () => {
+      const rsuReleaseHeaders = [
+        'Period Start Date',
+        'Grant Date',
+        'Release Date',
+        'Shares Vested',
+        'Fair Market Value Per Share',
+        'Release Reference Number',
+        'Sale Date (Sell-To-Cover only)', // This would trigger sales detection
+        'Sale Proceeds', // This too
+      ]
+
+      expect(detectCsvType(rsuReleaseHeaders)).toBe('rsu-releases')
+    })
+
+    it('should prioritize RSU releases over sales when both match', () => {
+      // Test with headers that could match both
+      const ambiguousHeaders = [
+        'Release Date', // RSU marker
+        'Shares Vested', // RSU marker
+        'Fair Market Value Per Share', // RSU marker
+        'Release Reference Number', // RSU marker
+        'Sale Date', // Sales marker
+        'Sale Proceeds', // Sales marker
+        'Sale Price Per Share', // Sales marker
+      ]
+
+      expect(detectCsvType(ambiguousHeaders)).toBe('rsu-releases')
     })
 
     it('should return unknown for unrecognized headers', () => {
@@ -152,6 +183,38 @@ Grant Number: 9375
     })
   })
 
+  describe('parseRsuReleasesCsv', () => {
+    const sampleRsuReleasesCsv = `RSU Releases
+Period Start Date,Period End Date,Grant Date,Grant Number,Grant Type,Grant Name,Grant Reason,Release Date,Shares Vested,Shares Sold-To-Cover,Shares Held,Value,,Fair Market Value Per Share,,Sale Date (Sell-To-Cover only),Sale Price Per Share,,Sale Proceeds,,Sell-To-Cover Amount,,Release Reference Number
+01-Jul-2024,30-Jun-2025,15-Sep-2022,54539,Share Units (RSU),15 SEP 2022 RSU Grant (One Cycle),Ongoing,13-Aug-2024,35,0,35,"$7,720.27",AUD,$220.579174,AUD,,,,,,$0.00,AUD,RBBFDB5AE1
+01-Jul-2024,30-Jun-2025,15-Sep-2023,68889,Share Units (RSU),15 SEP 2023 RSU Grant,Ongoing,13-Aug-2024,59,0,59,"$13,014.17",AUD,$220.579174,AUD,,,,,,$0.00,AUD,RBBFDB5AB9`
+
+    it('should parse RSU releases CSV successfully', () => {
+      const result = parseRsuReleasesCsv(sampleRsuReleasesCsv)
+
+      expect(result.errors).toHaveLength(0)
+      expect(result.data).toHaveLength(2)
+      expect(result.skippedRows).toBe(0)
+
+      const firstRecord = result.data[0]
+      expect(firstRecord.grantNumber).toBe('54539')
+      expect(firstRecord.releaseDate).toBe('2024-08-13') // Date parser normalizes format
+      expect(firstRecord.sharesVested).toBe(35)
+      expect(firstRecord.totalValue).toBe(7720.27)
+      expect(firstRecord.fairMarketValuePerShare).toBe(220.579174)
+      expect(firstRecord.releaseReferenceNumber).toBe('RBBFDB5AE1')
+    })
+
+    it('should handle RSU release CSV with missing data', () => {
+      const badRsuCsv = `Release Date,Shares Vested,Fair Market Value Per Share,Release Reference Number
+,invalid,not-a-number,ref`
+
+      const result = parseRsuReleasesCsv(badRsuCsv)
+      expect(result.data).toHaveLength(0) // Invalid data should be skipped
+      expect(result.skippedRows).toBe(1)
+    })
+  })
+
   describe('parseAnyCsv', () => {
     it('should auto-detect and parse sales CSV', () => {
       const salesCsv = `Withdrawal Reference Number,Sale Date,Shares Sold,Sale Proceeds
@@ -169,6 +232,15 @@ WRC123,08-Aug-2024,25,5000`
       const result = parseAnyCsv(vestingCsv)
       expect(result.type).toBe('vesting')
       expect(result.vesting?.data).toHaveLength(1)
+    })
+
+    it('should auto-detect and parse RSU releases CSV', () => {
+      const rsuReleasesCsv = `Release Date,Shares Vested,Fair Market Value Per Share,Release Reference Number,Sale Date,Sale Proceeds
+13-Aug-2024,35,220.579174,RBBFDB5AE1,,`
+
+      const result = parseAnyCsv(rsuReleasesCsv)
+      expect(result.type).toBe('rsu-releases')
+      expect(result.rsuReleases?.data).toHaveLength(1)
     })
 
     it('should return unknown for unrecognizable CSV', () => {
