@@ -4,14 +4,12 @@ import {
   convertShareEventValue,
   checkThirtyDayRule,
   calculateCapitalGains,
-  processVestingAndSale,
   calculateCgtDiscount,
   type VestingEvent,
   type TaxableIncomeResult,
   type ShareSaleEvent,
   type CapitalGainsResult,
   type ThirtyDayRuleResult,
-  type CombinedTaxResult,
 } from '@/lib/ess-calculations'
 
 describe('ESS Calculations', () => {
@@ -36,6 +34,7 @@ describe('ESS Calculations', () => {
           sharesVested: 250,
           sharePrice: 50,
         },
+        remainingShares: 250,
       })
     })
 
@@ -53,6 +52,7 @@ describe('ESS Calculations', () => {
       expect(result.taxableIncome).toBe(6500) // (70 * 100) - 500 = 6500
       expect(result.calculation.marketValue).toBe(7000)
       expect(result.calculation.costBase).toBe(500)
+      expect(result.remainingShares).toBe(100)
     })
 
     it('should default cost base to 0 if not provided', () => {
@@ -67,6 +67,7 @@ describe('ESS Calculations', () => {
 
       expect(result.taxableIncome).toBe(9000) // 30 * 300 - 0
       expect(result.calculation.costBase).toBe(0)
+      expect(result.remainingShares).toBe(300)
     })
 
     it('should handle USD vesting with currency conversion', () => {
@@ -118,6 +119,7 @@ describe('ESS Calculations', () => {
 
       expect(result.taxableIncome).toBeCloseTo(expectedTaxableIncome, 2)
       expect(result.calculation.marketValue).toBeCloseTo(expectedMarketValue, 2)
+      expect(result.remainingShares).toBe(123.5)
     })
 
     it('should handle scenario from documentation example 1', () => {
@@ -137,6 +139,7 @@ describe('ESS Calculations', () => {
 
       expect(result.taxableIncome).toBeCloseTo(13235.29, 2) // 9000 ÷ 0.6800
       expect(result.currency).toBe('AUD')
+      expect(result.remainingShares).toBe(300)
     })
 
     it('should handle scenario from documentation example 2', () => {
@@ -155,6 +158,7 @@ describe('ESS Calculations', () => {
       const result = calculateRsuVestingTaxableIncome(vestingEvent)
 
       expect(result.taxableIncome).toBeCloseTo(16153.85, 2) // 10500 ÷ 0.6500
+      expect(result.remainingShares).toBe(300)
     })
   })
 
@@ -476,151 +480,6 @@ describe('ESS Calculations', () => {
     })
   })
 
-  describe('processVestingAndSale', () => {
-    it('should apply 30-day rule and calculate combined tax impact', () => {
-      const vestingEvent: VestingEvent = {
-        vestDate: '2025-04-01',
-        sharePrice: 45, // USD
-        sharesVested: 200,
-        costBase: 0,
-        currency: 'USD',
-        exchangeRate: 0.63,
-      }
-
-      const saleEvent: ShareSaleEvent = {
-        saleDate: '2025-04-01', // Same day - 30-day rule applies
-        sharesSold: 200,
-        salePricePerShare: 45, // USD
-        currency: 'USD',
-        exchangeRate: 0.63,
-        brokerageCommission: 10, // USD
-      }
-
-      const result = processVestingAndSale(vestingEvent, saleEvent)
-
-      // With 30-day rule: taxable income is based on sale proceeds, no separate CGT
-      // USD $9,000 ÷ 0.6300 = AUD $14,286
-      expect(result).toEqual<CombinedTaxResult>({
-        taxableIncome: expect.closeTo(14270, 0), // ~14,286 - fees
-        capitalGain: 0,
-        thirtyDayRuleApplied: true,
-        currency: 'AUD',
-        vestingResult: null, // No separate vesting taxation due to 30-day rule
-        saleResult: expect.objectContaining({
-          appliedRule: '30-day',
-          capitalGain: 0,
-        }),
-      })
-    })
-
-    it('should calculate standard CGT when 30-day rule does not apply', () => {
-      const vestingEvent: VestingEvent = {
-        vestDate: '2024-06-01',
-        sharePrice: 50,
-        sharesVested: 250,
-        costBase: 0,
-        currency: 'AUD',
-      }
-
-      const saleEvent: ShareSaleEvent = {
-        saleDate: '2024-12-01', // 6 months later - no 30-day rule
-        sharesSold: 250,
-        salePricePerShare: 70,
-        currency: 'AUD',
-        brokerageCommission: 25,
-      }
-
-      const result = processVestingAndSale(vestingEvent, saleEvent)
-
-      expect(result).toEqual<CombinedTaxResult>({
-        taxableIncome: 12500, // Vesting income: 250 × $50
-        capitalGain: 4975, // Sale: (250 × $70) - 12500 - 25
-        thirtyDayRuleApplied: false,
-        currency: 'AUD',
-        vestingResult: expect.objectContaining({
-          taxableIncome: 12500,
-        }),
-        saleResult: expect.objectContaining({
-          appliedRule: 'standard-cgt',
-          capitalGain: 4975,
-        }),
-      })
-    })
-
-    it('should handle mixed currencies with standard CGT', () => {
-      // Vesting in USD, sale in USD, both converted to AUD
-      const vestingEvent: VestingEvent = {
-        vestDate: '2024-03-15',
-        sharePrice: 40, // USD
-        sharesVested: 100,
-        costBase: 0,
-        currency: 'USD',
-        exchangeRate: 0.65, // Vest rate
-      }
-
-      const saleEvent: ShareSaleEvent = {
-        saleDate: '2024-08-20',
-        sharesSold: 100,
-        salePricePerShare: 45, // USD
-        currency: 'USD',
-        exchangeRate: 0.64, // Sale rate (different from vest)
-      }
-
-      const result = processVestingAndSale(vestingEvent, saleEvent)
-
-      expect(result.thirtyDayRuleApplied).toBe(false)
-      expect(result.currency).toBe('AUD')
-      // Vesting: USD $4,000 ÷ 0.6500 = AUD $6,154
-      expect(result.taxableIncome).toBeCloseTo(6153.85, 2)
-      // Sale: USD $4,500 ÷ 0.6400 = AUD $7,031
-      // CGT: AUD $7,031 - AUD $6,154 = AUD $877
-      expect(result.capitalGain).toBeCloseTo(877, 0)
-    })
-
-    it('should throw error for mismatched share quantities', () => {
-      const vestingEvent: VestingEvent = {
-        vestDate: '2025-01-01',
-        sharePrice: 50,
-        sharesVested: 100, // Vested 100 shares
-        currency: 'AUD',
-      }
-
-      const saleEvent: ShareSaleEvent = {
-        saleDate: '2025-01-15',
-        sharesSold: 150, // Trying to sell 150 shares
-        salePricePerShare: 55,
-        currency: 'AUD',
-      }
-
-      expect(() => processVestingAndSale(vestingEvent, saleEvent)).toThrow(
-        'Cannot sell more shares (150) than were vested (100)'
-      )
-    })
-
-    it('should handle partial sales correctly', () => {
-      const vestingEvent: VestingEvent = {
-        vestDate: '2025-01-01',
-        sharePrice: 50,
-        sharesVested: 300,
-        currency: 'AUD',
-      }
-
-      const saleEvent: ShareSaleEvent = {
-        saleDate: '2025-06-01', // 5 months later
-        sharesSold: 100, // Partial sale
-        salePricePerShare: 70,
-        currency: 'AUD',
-      }
-
-      const result = processVestingAndSale(vestingEvent, saleEvent)
-
-      expect(result.taxableIncome).toBe(15000) // 300 × $50 (full vesting income)
-      // Partial CGT: (100 × $70) - (100 × $50) = $2,000
-      expect(result.capitalGain).toBe(2000)
-      expect(result.saleResult.calculation.sharesSold).toBe(100)
-    })
-  })
-
   describe('calculateCgtDiscount', () => {
     it('should apply 50% discount for holdings > 365 days with capital gain', () => {
       const result = calculateCgtDiscount(
@@ -818,54 +677,187 @@ describe('ESS Calculations', () => {
     })
   })
 
-  describe('Vesting and Sale with CGT Discount Integration', () => {
-    it('should apply CGT discount in processVestingAndSale for long-term holdings', () => {
+  describe('Enhanced calculateRsuVestingTaxableIncome with Sale Events', () => {
+    it('should apply 30-day rule when sale occurs within 30 days', () => {
       const vestingEvent: VestingEvent = {
-        vestDate: '2023-06-01',
-        sharePrice: 50,
-        sharesVested: 250,
+        vestDate: '2025-04-01',
+        sharePrice: 45, // USD
+        sharesVested: 200,
         costBase: 0,
-        currency: 'AUD',
+        currency: 'USD',
+        exchangeRate: 0.63,
       }
 
-      const saleEvent: ShareSaleEvent = {
-        saleDate: '2024-12-01', // 18 months later
-        sharesSold: 250,
-        salePricePerShare: 70,
-        currency: 'AUD',
-        brokerageCommission: 25,
-      }
+      const saleEvents: ShareSaleEvent[] = [
+        {
+          saleDate: '2025-04-01', // Same day - 30-day rule applies
+          sharesSold: 200,
+          salePricePerShare: 45, // USD
+          currency: 'USD',
+          exchangeRate: 0.63,
+          brokerageCommission: 10, // USD
+        },
+      ]
 
-      const result = processVestingAndSale(vestingEvent, saleEvent)
+      const result = calculateRsuVestingTaxableIncome(vestingEvent, saleEvents)
 
-      expect(result.taxableIncome).toBe(12500) // Vesting income unchanged
-      expect(result.capitalGain).toBe(2487.5) // 50% discount applied to $4,975 gain
-      expect(result.thirtyDayRuleApplied).toBe(false)
-      expect(result.saleResult.cgtDiscount.eligible).toBe(true)
-      expect(result.saleResult.cgtDiscount.discountRate).toBe(0.5)
+      // With 30-day rule: taxable income is adjusted based on sale proceeds
+      // USD $9,000 ÷ 0.6300 = AUD $14,286, minus fees
+      expect(result.taxableIncome).toBeCloseTo(14270, 0)
+      expect(result.remainingShares).toBe(0)
+      expect(result.saleEvents).toHaveLength(1)
+      expect(result.saleEvents?.[0].thirtyDayRule.applies).toBe(true)
+      expect(result.saleEvents?.[0].thirtyDayRule.daysBetween).toBe(0)
     })
 
-    it('should NOT apply CGT discount for 30-day rule scenarios', () => {
+    it('should handle partial sales with 30-day rule', () => {
       const vestingEvent: VestingEvent = {
         vestDate: '2025-06-01',
         sharePrice: 50,
+        sharesVested: 300,
+        currency: 'AUD',
+      }
+
+      const saleEvents: ShareSaleEvent[] = [
+        {
+          saleDate: '2025-06-15', // 14 days later - 30-day rule applies
+          sharesSold: 100, // Partial sale
+          salePricePerShare: 60,
+          currency: 'AUD',
+          brokerageCommission: 25,
+        },
+      ]
+
+      const result = calculateRsuVestingTaxableIncome(vestingEvent, saleEvents)
+
+      // Vesting income for 200 remaining shares: 200 * $50 = $10,000
+      // 30-day rule income for 100 sold shares: (100 * $60) - (100 * $0) - $25 = $5,975
+      // Total: $10,000 + $5,975 = $15,975
+      expect(result.taxableIncome).toBe(15975)
+      expect(result.remainingShares).toBe(200)
+      expect(result.saleEvents).toHaveLength(1)
+      expect(result.saleEvents?.[0].thirtyDayRule.applies).toBe(true)
+    })
+
+    it('should handle sales after 30-day period without adjustment', () => {
+      const vestingEvent: VestingEvent = {
+        vestDate: '2024-06-01',
+        sharePrice: 50,
+        sharesVested: 250,
+        currency: 'AUD',
+      }
+
+      const saleEvents: ShareSaleEvent[] = [
+        {
+          saleDate: '2024-12-01', // 6 months later - no 30-day rule
+          sharesSold: 100,
+          salePricePerShare: 70,
+          currency: 'AUD',
+          brokerageCommission: 25,
+        },
+      ]
+
+      const result = calculateRsuVestingTaxableIncome(vestingEvent, saleEvents)
+
+      // Normal vesting income: 250 * $50 = $12,500 (unaffected by later sales)
+      expect(result.taxableIncome).toBe(12500)
+      expect(result.remainingShares).toBe(150)
+      expect(result.saleEvents).toHaveLength(1)
+      expect(result.saleEvents?.[0].thirtyDayRule.applies).toBe(false)
+      expect(result.saleEvents?.[0].thirtyDayRule.daysBetween).toBeGreaterThan(
+        30
+      )
+    })
+
+    it('should handle multiple sales with mixed 30-day rule application', () => {
+      const vestingEvent: VestingEvent = {
+        vestDate: '2025-03-01',
+        sharePrice: 40,
+        sharesVested: 300,
+        currency: 'AUD',
+      }
+
+      const saleEvents: ShareSaleEvent[] = [
+        {
+          saleDate: '2025-03-20', // 19 days later - 30-day rule applies
+          sharesSold: 100,
+          salePricePerShare: 45,
+          currency: 'AUD',
+          brokerageCommission: 15,
+        },
+        {
+          saleDate: '2025-05-01', // 61 days later - no 30-day rule
+          sharesSold: 50,
+          salePricePerShare: 50,
+          currency: 'AUD',
+          brokerageCommission: 10,
+        },
+      ]
+
+      const result = calculateRsuVestingTaxableIncome(vestingEvent, saleEvents)
+
+      // Vesting income for 150 remaining shares: 150 * $40 = $6,000
+      // Normal vesting income for 50 shares sold after 30 days: 50 * $40 = $2,000
+      // 30-day rule income for 100 shares: (100 * $45) - (100 * $0) - $15 = $4,485
+      // Total: $6,000 + $2,000 + $4,485 = $12,485
+      expect(result.taxableIncome).toBe(12485)
+      expect(result.remainingShares).toBe(150)
+      expect(result.saleEvents).toHaveLength(2)
+      expect(result.saleEvents?.[0].thirtyDayRule.applies).toBe(true)
+      expect(result.saleEvents?.[1].thirtyDayRule.applies).toBe(false)
+    })
+
+    it('should throw error when trying to sell more shares than vested', () => {
+      const vestingEvent: VestingEvent = {
+        vestDate: '2025-01-01',
+        sharePrice: 50,
+        sharesVested: 100,
+        currency: 'AUD',
+      }
+
+      const saleEvents: ShareSaleEvent[] = [
+        {
+          saleDate: '2025-01-15',
+          sharesSold: 150, // More than vested
+          salePricePerShare: 55,
+          currency: 'AUD',
+        },
+      ]
+
+      expect(() =>
+        calculateRsuVestingTaxableIncome(vestingEvent, saleEvents)
+      ).toThrow('Cannot sell more shares (150) than were vested (100)')
+    })
+
+    it('should handle USD sales with currency conversion in 30-day rule', () => {
+      const vestingEvent: VestingEvent = {
+        vestDate: '2025-04-01',
+        sharePrice: 45, // USD
         sharesVested: 200,
-        currency: 'AUD',
+        costBase: 0,
+        currency: 'USD',
+        exchangeRate: 0.63,
       }
 
-      const saleEvent: ShareSaleEvent = {
-        saleDate: '2025-06-15', // 14 days later - 30-day rule applies
-        sharesSold: 200,
-        salePricePerShare: 60,
-        currency: 'AUD',
-      }
+      const saleEvents: ShareSaleEvent[] = [
+        {
+          saleDate: '2025-04-05', // 4 days later - 30-day rule applies
+          sharesSold: 200,
+          salePricePerShare: 47, // USD (higher price)
+          currency: 'USD',
+          exchangeRate: 0.64, // Different exchange rate at sale
+          brokerageCommission: 12, // USD
+        },
+      ]
 
-      const result = processVestingAndSale(vestingEvent, saleEvent)
+      const result = calculateRsuVestingTaxableIncome(vestingEvent, saleEvents)
 
-      expect(result.thirtyDayRuleApplied).toBe(true)
-      expect(result.capitalGain).toBe(0) // No separate CGT with 30-day rule
-      expect(result.saleResult.cgtDiscount.eligible).toBe(false)
-      expect(result.saleResult.cgtDiscount.discountRate).toBe(0)
+      // Sale proceeds: 200 * $47 = $9,400 USD
+      // Convert to AUD: $9,400 ÷ 0.64 = $14,687.50 AUD
+      // Fees: $12 ÷ 0.64 = $18.75 AUD
+      // Taxable income: $14,687.50 - $0 - $18.75 = $14,668.75
+      expect(result.taxableIncome).toBeCloseTo(14668.75, 2)
+      expect(result.remainingShares).toBe(0)
     })
   })
 })

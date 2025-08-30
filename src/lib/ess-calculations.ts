@@ -36,6 +36,12 @@ export interface TaxableIncomeResult {
     sharesVested: number
     sharePrice: number
   }
+  saleEvents?: Array<{
+    saleEvent: ShareSaleEvent
+    thirtyDayRule: ThirtyDayRuleResult
+    adjustedTaxableIncome: number
+  }>
+  remainingShares: number
 }
 
 export interface ShareSaleEvent {
@@ -91,12 +97,17 @@ export interface CombinedTaxResult {
 }
 
 /**
- * Calculates taxable income from RSU vesting
+ * Calculates taxable income from RSU vesting, with optional sale events for 30-day rule analysis
  * Formula: Taxable Income = Market Value of Shares at Vesting - Cost Base
  * Where: Market Value = Share Price × Number of Shares Vested
+ *
+ * If sale events are provided, applies the 30-day rule where applicable:
+ * - Sales within 30 days: taxable income is based on sale proceeds instead of vesting value
+ * - Sales after 30 days: separate vesting income and capital gains
  */
 export function calculateRsuVestingTaxableIncome(
-  event: VestingEvent
+  event: VestingEvent,
+  saleEvents?: ShareSaleEvent[]
 ): TaxableIncomeResult {
   const {
     sharePrice,
@@ -130,8 +141,92 @@ export function calculateRsuVestingTaxableIncome(
     resultCurrency = currency
   }
 
+  // Process any related sale events if provided
+  let adjustedTaxableIncome = taxableIncome
+  const processedSaleEvents: Array<{
+    saleEvent: ShareSaleEvent
+    thirtyDayRule: ThirtyDayRuleResult
+    adjustedTaxableIncome: number
+  }> = []
+  let totalSharesSold = 0
+
+  if (saleEvents && saleEvents.length > 0) {
+    // Sort sales by date to process chronologically
+    const sortedSales = [...saleEvents].sort(
+      (a, b) => new Date(a.saleDate).getTime() - new Date(b.saleDate).getTime()
+    )
+
+    for (const saleEvent of sortedSales) {
+      // Check if shares being sold exceed remaining shares
+      if (totalSharesSold + saleEvent.sharesSold > sharesVested) {
+        throw new Error(
+          `Cannot sell more shares (${totalSharesSold + saleEvent.sharesSold}) than were vested (${sharesVested})`
+        )
+      }
+
+      // Check 30-day rule
+      const thirtyDayRule = checkThirtyDayRule(
+        event.vestDate,
+        saleEvent.saleDate
+      )
+
+      let saleAdjustedIncome = 0
+
+      if (thirtyDayRule.applies) {
+        // 30-day rule: Sale date becomes taxing point, taxable income based on sale proceeds
+        // Convert sale proceeds to AUD if needed
+        let saleProceedsAud: number
+        let totalFeesAud: number
+
+        const brokerageCommission = saleEvent.brokerageCommission || 0
+        const supplementalFees = saleEvent.supplementalFees || 0
+
+        if (saleEvent.currency === 'USD' && saleEvent.exchangeRate) {
+          const grossProceeds =
+            saleEvent.sharesSold * saleEvent.salePricePerShare
+          const totalFees = brokerageCommission + supplementalFees
+          saleProceedsAud =
+            Math.round((grossProceeds / saleEvent.exchangeRate) * 100) / 100
+          totalFeesAud =
+            Math.round((totalFees / saleEvent.exchangeRate) * 100) / 100
+        } else if (saleEvent.currency === 'AUD') {
+          saleProceedsAud = saleEvent.sharesSold * saleEvent.salePricePerShare
+          totalFeesAud = brokerageCommission + supplementalFees
+        } else {
+          throw new Error(
+            'Exchange rate required for USD sales in 30-day rule calculation'
+          )
+        }
+
+        const costBaseForSoldShares =
+          costBase * (saleEvent.sharesSold / sharesVested)
+        saleAdjustedIncome =
+          saleProceedsAud - costBaseForSoldShares - totalFeesAud
+
+        // Adjust total taxable income by removing normal vesting income and adding 30-day rule income
+        // Need to work in the result currency (AUD)
+        const vestingIncomeForSoldSharesAud =
+          taxableIncome * (saleEvent.sharesSold / sharesVested)
+        adjustedTaxableIncome =
+          adjustedTaxableIncome -
+          vestingIncomeForSoldSharesAud +
+          saleAdjustedIncome
+      }
+
+      processedSaleEvents.push({
+        saleEvent,
+        thirtyDayRule,
+        adjustedTaxableIncome: saleAdjustedIncome,
+      })
+
+      totalSharesSold += saleEvent.sharesSold
+    }
+  }
+
+  const remainingShares = sharesVested - totalSharesSold
+
   return {
-    taxableIncome,
+    taxableIncome: adjustedTaxableIncome,
     currency: resultCurrency,
     calculation: {
       marketValue: marketValue,
@@ -139,6 +234,9 @@ export function calculateRsuVestingTaxableIncome(
       sharesVested: sharesVested,
       sharePrice: sharePrice,
     },
+    saleEvents:
+      processedSaleEvents.length > 0 ? processedSaleEvents : undefined,
+    remainingShares,
   }
 }
 
@@ -396,126 +494,5 @@ export function calculateCapitalGains(
       sharesSold,
       salePricePerShare,
     },
-  }
-}
-
-/**
- * Processes a vesting event followed by a sale, applying 30-day rule if applicable
- * This is the main function that combines vesting income and sale calculations
- *
- * @param vestingEvent - The RSU vesting event
- * @param saleEvent - The subsequent share sale event
- */
-export function processVestingAndSale(
-  vestingEvent: VestingEvent,
-  saleEvent: ShareSaleEvent
-): CombinedTaxResult {
-  // Validate share quantities
-  if (saleEvent.sharesSold > vestingEvent.sharesVested) {
-    throw new Error(
-      `Cannot sell more shares (${saleEvent.sharesSold}) than were vested (${vestingEvent.sharesVested})`
-    )
-  }
-
-  // Check if 30-day rule applies
-  const thirtyDayRule = checkThirtyDayRule(
-    vestingEvent.vestDate,
-    saleEvent.saleDate
-  )
-
-  if (thirtyDayRule.applies) {
-    // 30-day rule: Sale date becomes taxing point, no separate vesting income
-    // Taxable income = Sale proceeds - cost base - fees (all in AUD)
-
-    // Convert sale proceeds to AUD
-    const { sharesSold, salePricePerShare, currency, exchangeRate } = saleEvent
-    const brokerageCommission = saleEvent.brokerageCommission || 0
-    const supplementalFees = saleEvent.supplementalFees || 0
-
-    // Validate USD conversion requirements
-    if (currency === 'USD' && !exchangeRate) {
-      throw new Error(
-        'Exchange rate required for USD sales in 30-day rule calculation'
-      )
-    }
-
-    let grossProceedsAud: number
-    let totalFeesAud: number
-
-    if (currency === 'USD' && exchangeRate) {
-      const grossProceeds = sharesSold * salePricePerShare
-      const totalFees = brokerageCommission + supplementalFees
-      grossProceedsAud = Math.round((grossProceeds / exchangeRate) * 100) / 100
-      totalFeesAud = Math.round((totalFees / exchangeRate) * 100) / 100
-    } else {
-      grossProceedsAud = sharesSold * salePricePerShare
-      totalFeesAud = brokerageCommission + supplementalFees
-    }
-
-    const costBase = vestingEvent.costBase || 0
-    const taxableIncome = grossProceedsAud - costBase - totalFeesAud
-
-    return {
-      taxableIncome: Math.round(taxableIncome * 100) / 100,
-      capitalGain: 0, // No separate capital gain with 30-day rule
-      thirtyDayRuleApplied: true,
-      currency: 'AUD',
-      vestingResult: null, // No separate vesting result
-      saleResult: {
-        capitalGain: 0,
-        isGain: false,
-        costBase,
-        saleProceeds: grossProceedsAud,
-        netProceeds: grossProceedsAud - totalFeesAud,
-        currency: 'AUD',
-        appliedRule: '30-day',
-        cgtDiscount: {
-          eligible: false,
-          holdingPeriodDays: 0,
-          discountRate: 0,
-          grossCapitalGain: 0,
-          discountedCapitalGain: 0,
-        },
-        calculation: {
-          grossProceeds:
-            currency === 'USD'
-              ? sharesSold * salePricePerShare
-              : grossProceedsAud,
-          totalFees:
-            currency === 'USD'
-              ? brokerageCommission + supplementalFees
-              : totalFeesAud,
-          costBase,
-          sharesSold,
-          salePricePerShare,
-        },
-      },
-    }
-  } else {
-    // Standard CGT: Separate vesting income and capital gains
-
-    // Calculate vesting taxable income
-    const vestingResult = calculateRsuVestingTaxableIncome(vestingEvent)
-
-    // Calculate cost base for the sold shares (proportional)
-    const vestingValuePerShare =
-      vestingResult.taxableIncome / vestingEvent.sharesVested
-    const costBaseForSoldShares = vestingValuePerShare * saleEvent.sharesSold
-
-    // Calculate capital gains (using vesting date as acquisition date)
-    const saleResult = calculateCapitalGains(
-      saleEvent,
-      costBaseForSoldShares,
-      vestingEvent.vestDate
-    )
-
-    return {
-      taxableIncome: vestingResult.taxableIncome, // Full vesting income (even for partial sales)
-      capitalGain: saleResult.capitalGain,
-      thirtyDayRuleApplied: false,
-      currency: 'AUD',
-      vestingResult,
-      saleResult,
-    }
   }
 }

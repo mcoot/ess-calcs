@@ -132,11 +132,32 @@ export default function CalculationsPage() {
       return saleDate >= periodStart && saleDate <= periodEnd
     })
 
-    // Calculate vesting taxable income using RSU release data
+    // Calculate vesting taxable income using RSU release data with related sales
     const vestingResults = rsuReleasesInPeriod
       .map((release) => {
+        // Find all sales related to this RSU release
+        const relatedSales = data.sales
+          .filter(
+            (sale) =>
+              sale.originatingReleaseRef === release.releaseReferenceNumber
+          )
+          .map(
+            (sale): ShareSaleEvent => ({
+              saleDate: sale.saleDate,
+              sharesSold: sale.sharesSold,
+              salePricePerShare: sale.salePricePerShare,
+              currency:
+                sale.currency === 'USD' || sale.currency === 'AUD'
+                  ? sale.currency
+                  : 'AUD',
+              brokerageCommission: sale.brokerageCommission,
+              supplementalFees: sale.supplementalTransactionFee,
+              acquisitionDate: release.releaseDate,
+              // Note: Exchange rate would need to be added if we have that data available
+            })
+          )
+
         // Convert RSU release record to VestingEvent format
-        // RSU releases have the actual market price at vesting
         const vestingEvent: VestingEvent = {
           vestDate: release.releaseDate,
           sharePrice: release.fairMarketValuePerShare,
@@ -146,10 +167,14 @@ export default function CalculationsPage() {
             release.currency === 'USD' || release.currency === 'AUD'
               ? release.currency
               : 'AUD',
+          // Note: Exchange rate would need to be added if we have that data available for USD releases
         }
 
         try {
-          const calculation = calculateRsuVestingTaxableIncome(vestingEvent)
+          const calculation = calculateRsuVestingTaxableIncome(
+            vestingEvent,
+            relatedSales.length > 0 ? relatedSales : undefined
+          )
           return {
             rsuRelease: release,
             calculation,
@@ -161,119 +186,47 @@ export default function CalculationsPage() {
       })
       .filter((result): result is NonNullable<typeof result> => result !== null)
 
-    // Calculate capital gains for sales
+    // Get all sales that were already handled by 30-day rule in RSU vesting calculations
+    const processedThirtyDayRuleSales = new Set<string>()
+    vestingResults.forEach((result) => {
+      result.calculation.saleEvents?.forEach((saleEvent) => {
+        if (saleEvent.thirtyDayRule.applies) {
+          // Create a unique key for the sale (we'll use saleDate and sharesSold as a simple key)
+          const saleKey = `${saleEvent.saleEvent.saleDate}-${saleEvent.saleEvent.sharesSold}`
+          processedThirtyDayRuleSales.add(saleKey)
+        }
+      })
+    })
+
+    // Calculate capital gains for sales that are NOT subject to 30-day rule
     const capitalGainsResults = salesInPeriod
+      .filter((sale) => {
+        // Filter out 30-day rule sales that were already handled in RSU vesting calculations
+        const saleKey = `${sale.saleDate}-${sale.sharesSold}`
+        const correspondingRelease = (data.rsuReleases || []).find(
+          (release) =>
+            release.releaseReferenceNumber === sale.originatingReleaseRef
+        )
+
+        if (correspondingRelease) {
+          const rule = checkThirtyDayRule(
+            correspondingRelease.releaseDate,
+            sale.saleDate
+          )
+          return !rule.applies || !processedThirtyDayRuleSales.has(saleKey)
+        }
+
+        return true // Include sales without corresponding releases for now
+      })
       .map((sale) => {
         try {
-          // Find corresponding RSU release to determine actual cost basis and check 30-day rule
+          // Find corresponding RSU release to determine actual cost basis
           const correspondingRelease = (data.rsuReleases || []).find(
             (release) =>
               release.releaseReferenceNumber === sale.originatingReleaseRef
           )
 
-          let thirtyDayRule = undefined
-          let actualCostBasis = sale.originalCostBasisTotal
-
-          if (correspondingRelease) {
-            // Use the RSU release date for 30-day rule check
-            const rule = checkThirtyDayRule(
-              correspondingRelease.releaseDate,
-              sale.saleDate
-            )
-            thirtyDayRule = {
-              applies: rule.applies,
-              vestingDate: correspondingRelease.releaseDate,
-              daysBetween: rule.daysBetween,
-            }
-
-            // For 30-day rule sales, cost basis is the FMV at vesting
-            if (rule.applies) {
-              actualCostBasis =
-                correspondingRelease.fairMarketValuePerShare * sale.sharesSold
-
-              return {
-                sale,
-                calculation: {
-                  capitalGain: 0,
-                  isGain: false,
-                  costBase: actualCostBasis,
-                  saleProceeds: sale.saleProceeds,
-                  netProceeds:
-                    sale.saleProceeds -
-                    sale.brokerageCommission -
-                    sale.supplementalTransactionFee,
-                  currency: 'AUD',
-                  appliedRule: '30-day',
-                  cgtDiscount: {
-                    eligible: false,
-                    holdingPeriodDays: 0,
-                    discountRate: 0,
-                    grossCapitalGain: 0,
-                    discountedCapitalGain: 0,
-                  },
-                  calculation: {
-                    grossProceeds: sale.saleProceeds,
-                    totalFees:
-                      sale.brokerageCommission +
-                      sale.supplementalTransactionFee,
-                    costBase: actualCostBasis,
-                    sharesSold: sale.sharesSold,
-                    salePricePerShare: sale.salePricePerShare,
-                  },
-                } as CapitalGainsResult,
-                thirtyDayRule,
-              }
-            }
-          } else if (sale.originalAcquisitionDate) {
-            // Fallback to using original acquisition date if no RSU release found
-            const rule = checkThirtyDayRule(
-              sale.originalAcquisitionDate,
-              sale.saleDate
-            )
-            thirtyDayRule = {
-              applies: rule.applies,
-              vestingDate: sale.originalAcquisitionDate,
-              daysBetween: rule.daysBetween,
-            }
-
-            // Skip CGT calculation if 30-day rule applies
-            if (rule.applies) {
-              return {
-                sale,
-                calculation: {
-                  capitalGain: 0,
-                  isGain: false,
-                  costBase: sale.originalCostBasisTotal,
-                  saleProceeds: sale.saleProceeds,
-                  netProceeds:
-                    sale.saleProceeds -
-                    sale.brokerageCommission -
-                    sale.supplementalTransactionFee,
-                  currency: 'AUD',
-                  appliedRule: '30-day',
-                  cgtDiscount: {
-                    eligible: false,
-                    holdingPeriodDays: 0,
-                    discountRate: 0,
-                    grossCapitalGain: 0,
-                    discountedCapitalGain: 0,
-                  },
-                  calculation: {
-                    grossProceeds: sale.saleProceeds,
-                    totalFees:
-                      sale.brokerageCommission +
-                      sale.supplementalTransactionFee,
-                    costBase: sale.originalCostBasisTotal,
-                    sharesSold: sale.sharesSold,
-                    salePricePerShare: sale.salePricePerShare,
-                  },
-                } as CapitalGainsResult,
-                thirtyDayRule,
-              }
-            }
-          }
-
-          // Standard CGT calculation
+          // Standard CGT calculation (no 30-day rule applies)
           const saleEvent: ShareSaleEvent = {
             saleDate: sale.saleDate,
             sharesSold: sale.sharesSold,
@@ -288,7 +241,7 @@ export default function CalculationsPage() {
           // Use FMV at vesting as cost basis if we have RSU release data
           const costBasis = correspondingRelease
             ? correspondingRelease.fairMarketValuePerShare * sale.sharesSold
-            : actualCostBasis
+            : sale.originalCostBasisTotal
 
           const calculation = calculateCapitalGains(
             saleEvent,
@@ -299,7 +252,18 @@ export default function CalculationsPage() {
           return {
             sale,
             calculation,
-            thirtyDayRule,
+            thirtyDayRule: {
+              applies: false,
+              vestingDate:
+                correspondingRelease?.releaseDate ||
+                sale.originalAcquisitionDate,
+              daysBetween: correspondingRelease
+                ? checkThirtyDayRule(
+                    correspondingRelease.releaseDate,
+                    sale.saleDate
+                  ).daysBetween
+                : undefined,
+            },
           }
         } catch {
           // Error calculating capital gains - skip this record
@@ -576,7 +540,13 @@ export default function CalculationsPage() {
                           Grant
                         </th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Shares
+                          Total Shares
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Sale Events
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Remaining Shares
                         </th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                           Taxable Income
@@ -595,6 +565,41 @@ export default function CalculationsPage() {
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                               {result.rsuRelease.sharesVested.toLocaleString()}
+                            </td>
+                            <td className="px-6 py-4 text-sm text-gray-900">
+                              {result.calculation.saleEvents &&
+                              result.calculation.saleEvents.length > 0 ? (
+                                <div className="space-y-1">
+                                  {result.calculation.saleEvents.map(
+                                    (saleEvent, saleIndex) => (
+                                      <div key={saleIndex} className="text-xs">
+                                        <span className="font-medium">
+                                          {formatDate(
+                                            saleEvent.saleEvent.saleDate
+                                          )}
+                                          :
+                                        </span>{' '}
+                                        {saleEvent.saleEvent.sharesSold.toLocaleString()}{' '}
+                                        shares
+                                        {saleEvent.thirtyDayRule.applies && (
+                                          <span className="ml-1 inline-flex px-1 py-0.5 text-xs font-medium rounded bg-orange-100 text-orange-800">
+                                            30-day
+                                          </span>
+                                        )}
+                                      </div>
+                                    )
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="text-gray-500 text-sm">
+                                  No sales
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                              <span className="font-medium">
+                                {result.calculation.remainingShares.toLocaleString()}
+                              </span>
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-green-600">
                               {formatCurrency(result.calculation.taxableIncome)}
