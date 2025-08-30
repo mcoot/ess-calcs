@@ -2,7 +2,12 @@
 
 import { useState } from 'react'
 import { clearImportedData, exportDataAsJson } from '@/lib/storage'
-import type { ImportedData, ShareSaleRecord, VestingRecord } from '@/types'
+import type {
+  ImportedData,
+  ShareSaleRecord,
+  VestingRecord,
+  RsuReleaseRecord,
+} from '@/types'
 
 interface ImportedDataViewerProps {
   data: ImportedData
@@ -113,7 +118,9 @@ function DataTable<T>({ data, columns, maxRows = 100 }: TableProps<T>) {
 }
 
 export function ImportedDataViewer({ data }: ImportedDataViewerProps) {
-  const [activeTab, setActiveTab] = useState<'sales' | 'vesting'>('sales')
+  const [activeTab, setActiveTab] = useState<
+    'sales' | 'vesting' | 'rsu-releases'
+  >('sales')
   const [showConfirmClear, setShowConfirmClear] = useState(false)
 
   const handleClearData = () => {
@@ -195,6 +202,37 @@ export function ImportedDataViewer({ data }: ImportedDataViewerProps) {
     },
     { key: 'grantType' as keyof VestingRecord, label: 'Type' },
     { key: 'grantReason' as keyof VestingRecord, label: 'Reason' },
+  ]
+
+  const rsuReleaseColumns = [
+    { key: 'releaseDate' as keyof RsuReleaseRecord, label: 'Release Date' },
+    { key: 'grantNumber' as keyof RsuReleaseRecord, label: 'Grant #' },
+    { key: 'grantName' as keyof RsuReleaseRecord, label: 'Grant Name' },
+    { key: 'grantDate' as keyof RsuReleaseRecord, label: 'Grant Date' },
+    {
+      key: 'sharesVested' as keyof RsuReleaseRecord,
+      label: 'Shares Vested',
+      format: formatNumber,
+    },
+    {
+      key: 'fairMarketValuePerShare' as keyof RsuReleaseRecord,
+      label: 'FMV/Share',
+      format: formatCurrency,
+    },
+    {
+      key: 'totalValue' as keyof RsuReleaseRecord,
+      label: 'Total Value',
+      format: formatCurrency,
+    },
+    {
+      key: 'sharesHeld' as keyof RsuReleaseRecord,
+      label: 'Shares Held',
+      format: formatNumber,
+    },
+    {
+      key: 'releaseReferenceNumber' as keyof RsuReleaseRecord,
+      label: 'Release Ref',
+    },
   ]
 
   return (
@@ -311,7 +349,7 @@ export function ImportedDataViewer({ data }: ImportedDataViewerProps) {
             backgroundColor: activeTab === 'sales' ? '#0066cc' : '#f8f9fa',
             color: activeTab === 'sales' ? 'white' : '#495057',
             border: '1px solid #dee2e6',
-            borderRadius: '4px 0 0 4px',
+            borderRadius: '4px 0 0 0',
             cursor: 'pointer',
           }}
         >
@@ -325,11 +363,26 @@ export function ImportedDataViewer({ data }: ImportedDataViewerProps) {
             color: activeTab === 'vesting' ? 'white' : '#495057',
             border: '1px solid #dee2e6',
             borderLeft: 'none',
-            borderRadius: '0 4px 4px 0',
+            borderRadius: '0',
             cursor: 'pointer',
           }}
         >
           Vesting ({data.vesting.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('rsu-releases')}
+          style={{
+            padding: '0.5rem 1rem',
+            backgroundColor:
+              activeTab === 'rsu-releases' ? '#0066cc' : '#f8f9fa',
+            color: activeTab === 'rsu-releases' ? 'white' : '#495057',
+            border: '1px solid #dee2e6',
+            borderLeft: 'none',
+            borderRadius: '0 4px 0 0',
+            cursor: 'pointer',
+          }}
+        >
+          RSU Releases ({data.rsuReleases?.length || 0})
         </button>
       </div>
 
@@ -350,6 +403,16 @@ export function ImportedDataViewer({ data }: ImportedDataViewerProps) {
             <p>No vesting data imported yet.</p>
           ) : (
             <DataTable data={data.vesting} columns={vestingColumns} />
+          )}
+        </div>
+      )}
+
+      {activeTab === 'rsu-releases' && (
+        <div>
+          {!data.rsuReleases || data.rsuReleases.length === 0 ? (
+            <p>No RSU release data imported yet.</p>
+          ) : (
+            <DataTable data={data.rsuReleases} columns={rsuReleaseColumns} />
           )}
         </div>
       )}
