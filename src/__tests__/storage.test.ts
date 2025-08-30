@@ -56,6 +56,7 @@ describe('Storage', () => {
       const testData = {
         sales: [{ id: '1', withdrawalRef: 'WRC123' } as ShareSaleRecord],
         vesting: [{ id: '1', grantNumber: '9375' } as VestingRecord],
+        rsuReleases: [],
         lastUpdated: '2024-01-01T00:00:00.000Z',
       }
 
@@ -86,6 +87,7 @@ describe('Storage', () => {
       const testData = {
         sales: [{ id: '1', withdrawalRef: 'WRC123' } as ShareSaleRecord],
         vesting: [{ id: '1', grantNumber: '9375' } as VestingRecord],
+        rsuReleases: [],
         lastUpdated: '2024-01-01T00:00:00.000Z',
       }
 
@@ -274,6 +276,7 @@ describe('Storage', () => {
       const testData = {
         sales: [{ id: '1', withdrawalRef: 'WRC123' }] as ShareSaleRecord[],
         vesting: [{ id: '1', grantNumber: '9375' }] as VestingRecord[],
+        rsuReleases: [],
         lastUpdated: '2024-01-01T00:00:00.000Z',
       }
 
@@ -293,6 +296,7 @@ describe('Storage', () => {
       const testData = {
         sales: [{ id: '1', withdrawalRef: 'WRC123' }] as ShareSaleRecord[],
         vesting: [{ id: '1', grantNumber: '9375' }] as VestingRecord[],
+        rsuReleases: [],
         lastUpdated: '2024-01-01T00:00:00.000Z',
       }
 

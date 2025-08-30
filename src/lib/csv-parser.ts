@@ -8,6 +8,7 @@
 import type {
   ShareSaleRecord,
   VestingRecord,
+  RsuReleaseRecord,
   CsvParseResult,
   CsvFileType,
   CsvParseOptions,
@@ -36,6 +37,13 @@ export function detectCsvType(headers: string[]): CsvFileType {
 
   const vestingMarkers = ['grant date', 'grant number', 'vest date', 'shares']
 
+  const rsuReleaseMarkers = [
+    'release date',
+    'shares vested',
+    'fair market value per share',
+    'release reference number',
+  ]
+
   const salesMatches = salesMarkers.filter((marker) =>
     normalizedHeaders.some((header) => header.includes(marker))
   ).length
@@ -44,7 +52,12 @@ export function detectCsvType(headers: string[]): CsvFileType {
     normalizedHeaders.some((header) => header.includes(marker))
   ).length
 
+  const rsuReleaseMatches = rsuReleaseMarkers.filter((marker) =>
+    normalizedHeaders.some((header) => header.includes(marker))
+  ).length
+
   if (salesMatches >= 3) return 'sales'
+  if (rsuReleaseMatches >= 3) return 'rsu-releases'
   if (vestingMatches >= 3) return 'vesting'
   return 'unknown'
 }
@@ -487,6 +500,173 @@ export function parseVestingScheduleCsv(
 }
 
 /**
+ * Parses RSU release CSV data
+ */
+export function parseRsuReleasesCsv(
+  csvText: string,
+  options: Partial<CsvParseOptions> = {}
+): CsvParseResult<RsuReleaseRecord> {
+  const opts = { ...DEFAULT_PARSE_OPTIONS, ...options }
+  const rows = parseCsvText(csvText)
+
+  const result: CsvParseResult<RsuReleaseRecord> = {
+    data: [],
+    errors: [],
+    warnings: [],
+    skippedRows: 0,
+  }
+
+  if (rows.length === 0) {
+    result.errors.push('CSV file is empty')
+    return result
+  }
+
+  // Find the header row (skip title rows)
+  let headerRowIndex = -1
+  for (let i = 0; i < Math.min(5, rows.length); i++) {
+    const row = rows[i]
+    if (row.some((cell) => cell.toLowerCase().includes('release date'))) {
+      headerRowIndex = i
+      break
+    }
+  }
+
+  if (headerRowIndex === -1) {
+    result.errors.push('Could not find RSU release headers')
+    return result
+  }
+
+  const headers = rows[headerRowIndex]
+
+  // Map header indices
+  const getHeaderIndex = (searchTerms: string[]) => {
+    for (const term of searchTerms) {
+      const index = headers.findIndex((h) =>
+        h.toLowerCase().includes(term.toLowerCase())
+      )
+      if (index !== -1) return index
+    }
+    return -1
+  }
+
+  const indices = {
+    periodStartDate: getHeaderIndex(['period start date']),
+    periodEndDate: getHeaderIndex(['period end date']),
+    grantDate: getHeaderIndex(['grant date']),
+    grantNumber: getHeaderIndex(['grant number']),
+    grantType: getHeaderIndex(['grant type']),
+    grantName: getHeaderIndex(['grant name']),
+    grantReason: getHeaderIndex(['grant reason']),
+    releaseDate: getHeaderIndex(['release date']),
+    sharesVested: getHeaderIndex(['shares vested']),
+    sharesSoldToCover: getHeaderIndex(['shares sold-to-cover']),
+    sharesHeld: getHeaderIndex(['shares held']),
+    totalValue: getHeaderIndex(['value']),
+    fairMarketValuePerShare: getHeaderIndex(['fair market value per share']),
+    saleDate: getHeaderIndex(['sale date']),
+    salePricePerShare: getHeaderIndex(['sale price per share']),
+    saleProceeds: getHeaderIndex(['sale proceeds']),
+    sellToCoverAmount: getHeaderIndex(['sell-to-cover amount']),
+    releaseReferenceNumber: getHeaderIndex(['release reference number']),
+  }
+
+  // Validate required fields
+  const requiredFields = ['releaseDate', 'sharesVested'] as const
+
+  for (const field of requiredFields) {
+    if (indices[field] === -1) {
+      result.errors.push(`Required column not found: ${field}`)
+    }
+  }
+
+  if (result.errors.length > 0) {
+    return result
+  }
+
+  // Parse data rows
+  for (let i = headerRowIndex + 1; i < rows.length; i++) {
+    const row = rows[i]
+
+    // Skip empty rows or summary rows
+    if (
+      opts.skipEmptyRows &&
+      row.every((cell) => !cell || cell.trim() === '')
+    ) {
+      result.skippedRows++
+      continue
+    }
+
+    // Skip summary/total rows
+    if (row[0] === '' && row[1] === '' && row[2] === '') {
+      result.skippedRows++
+      continue
+    }
+
+    try {
+      const record: RsuReleaseRecord = {
+        id: `${row[indices.releaseReferenceNumber] || 'RSU'}-${i}`,
+        periodStartDate: row[indices.periodStartDate] || '',
+        periodEndDate: row[indices.periodEndDate] || '',
+        grantDate: parseDate(row[indices.grantDate] || ''),
+        grantNumber: row[indices.grantNumber] || '',
+        grantType: row[indices.grantType] || '',
+        grantName: row[indices.grantName] || '',
+        grantReason: row[indices.grantReason] || '',
+        releaseDate: parseDate(row[indices.releaseDate] || ''),
+        sharesVested: parseFloat(row[indices.sharesVested] || '0') || 0,
+        sharesSoldToCover:
+          parseFloat(row[indices.sharesSoldToCover] || '0') || 0,
+        sharesHeld: parseFloat(row[indices.sharesHeld] || '0') || 0,
+        totalValue: parseMonetaryValue(row[indices.totalValue] || ''),
+        fairMarketValuePerShare: parseMonetaryValue(
+          row[indices.fairMarketValuePerShare] || ''
+        ),
+        saleDate: row[indices.saleDate]
+          ? parseDate(row[indices.saleDate])
+          : undefined,
+        salePricePerShare: row[indices.salePricePerShare]
+          ? parseMonetaryValue(row[indices.salePricePerShare])
+          : undefined,
+        saleProceeds: row[indices.saleProceeds]
+          ? parseMonetaryValue(row[indices.saleProceeds])
+          : undefined,
+        sellToCoverAmount: parseMonetaryValue(
+          row[indices.sellToCoverAmount] || ''
+        ),
+        releaseReferenceNumber: row[indices.releaseReferenceNumber] || '',
+        currency: 'AUD', // Default based on sample data
+      }
+
+      // Validate required data
+      if (opts.validateData) {
+        if (!record.releaseDate) {
+          result.warnings.push(`Row ${i + 1}: Missing or invalid release date`)
+        }
+        if (record.sharesVested <= 0) {
+          result.warnings.push(`Row ${i + 1}: Invalid shares vested quantity`)
+        }
+        if (!record.releaseReferenceNumber) {
+          result.warnings.push(`Row ${i + 1}: Missing release reference number`)
+        }
+      }
+
+      // Only add records with valid essential data
+      if (record.releaseDate && record.sharesVested > 0) {
+        result.data.push(record)
+      } else {
+        result.skippedRows++
+      }
+    } catch (error) {
+      result.errors.push(
+        `Row ${i + 1}: ${error instanceof Error ? error.message : 'Parse error'}`
+      )
+    }
+  }
+
+  return result
+}
+
+/**
  * Auto-detects CSV type and parses accordingly
  */
 export function parseAnyCsv(
@@ -496,6 +676,7 @@ export function parseAnyCsv(
   type: CsvFileType
   sales?: CsvParseResult<ShareSaleRecord>
   vesting?: CsvParseResult<VestingRecord>
+  rsuReleases?: CsvParseResult<RsuReleaseRecord>
 } {
   const rows = parseCsvText(csvText)
 
@@ -518,6 +699,12 @@ export function parseAnyCsv(
       return {
         type: 'vesting',
         vesting: parseVestingScheduleCsv(csvText, options),
+      }
+
+    case 'rsu-releases':
+      return {
+        type: 'rsu-releases',
+        rsuReleases: parseRsuReleasesCsv(csvText, options),
       }
 
     default:

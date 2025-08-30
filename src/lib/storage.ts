@@ -5,7 +5,12 @@
  * with data validation and error handling.
  */
 
-import type { ImportedData, ShareSaleRecord, VestingRecord } from '@/types'
+import type {
+  ImportedData,
+  ShareSaleRecord,
+  VestingRecord,
+  RsuReleaseRecord,
+} from '@/types'
 
 const STORAGE_KEYS = {
   IMPORTED_DATA: 'ess-calcs-imported-data',
@@ -18,6 +23,7 @@ const STORAGE_KEYS = {
 const defaultImportedData: ImportedData = {
   sales: [],
   vesting: [],
+  rsuReleases: [],
   lastUpdated: new Date().toISOString(),
 }
 
@@ -45,14 +51,18 @@ export function loadImportedData(): ImportedData {
 
     const parsed = JSON.parse(stored) as ImportedData
 
-    // Validate structure
-    if (
-      typeof parsed === 'object' &&
-      Array.isArray(parsed.sales) &&
-      Array.isArray(parsed.vesting) &&
-      typeof parsed.lastUpdated === 'string'
-    ) {
-      return parsed
+    // Validate structure and migrate if needed
+    if (typeof parsed === 'object' && typeof parsed.lastUpdated === 'string') {
+      // Ensure all required arrays exist
+      const migratedData: ImportedData = {
+        sales: Array.isArray(parsed.sales) ? parsed.sales : [],
+        vesting: Array.isArray(parsed.vesting) ? parsed.vesting : [],
+        rsuReleases: Array.isArray(parsed.rsuReleases)
+          ? parsed.rsuReleases
+          : [],
+        lastUpdated: parsed.lastUpdated,
+      }
+      return migratedData
     }
 
     // eslint-disable-next-line no-console
@@ -164,6 +174,41 @@ export function replaceVestingData(records: VestingRecord[]): boolean {
 }
 
 /**
+ * Adds new RSU release records to existing data
+ */
+export function addRsuReleaseRecords(newRecords: RsuReleaseRecord[]): boolean {
+  const currentData = loadImportedData()
+
+  // Remove duplicates based on release reference number
+  const existingRefs = new Set(
+    currentData.rsuReleases.map((record) => record.releaseReferenceNumber)
+  )
+  const uniqueNewRecords = newRecords.filter(
+    (record) => !existingRefs.has(record.releaseReferenceNumber)
+  )
+
+  const updatedData: ImportedData = {
+    ...currentData,
+    rsuReleases: [...currentData.rsuReleases, ...uniqueNewRecords],
+  }
+
+  return saveImportedData(updatedData)
+}
+
+/**
+ * Replaces all RSU release data
+ */
+export function replaceRsuReleaseData(records: RsuReleaseRecord[]): boolean {
+  const currentData = loadImportedData()
+  const updatedData: ImportedData = {
+    ...currentData,
+    rsuReleases: records,
+  }
+
+  return saveImportedData(updatedData)
+}
+
+/**
  * Clears all imported data
  */
 export function clearImportedData(): boolean {
@@ -186,10 +231,13 @@ export function clearImportedData(): boolean {
 export function getDataSummary(): {
   salesCount: number
   vestingCount: number
+  rsuReleasesCount: number
   lastUpdated: string | null
   totalSharesSold: number
   totalSalesProceeds: number
   totalSharesVested: number
+  totalRsuSharesVested: number
+  totalRsuValue: number
 } {
   const data = loadImportedData()
 
@@ -205,14 +253,25 @@ export function getDataSummary(): {
     (sum, record) => sum + record.shares,
     0
   )
+  const totalRsuSharesVested = data.rsuReleases.reduce(
+    (sum, record) => sum + record.sharesVested,
+    0
+  )
+  const totalRsuValue = data.rsuReleases.reduce(
+    (sum, record) => sum + record.totalValue,
+    0
+  )
 
   return {
     salesCount: data.sales.length,
     vestingCount: data.vesting.length,
+    rsuReleasesCount: data.rsuReleases.length,
     lastUpdated: data.lastUpdated,
     totalSharesSold,
     totalSalesProceeds,
     totalSharesVested,
+    totalRsuSharesVested,
+    totalRsuValue,
   }
 }
 

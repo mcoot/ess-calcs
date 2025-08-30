@@ -33,6 +33,29 @@ export interface VestingRecord {
   shares: number
 }
 
+export interface RsuReleaseRecord {
+  id: string
+  periodStartDate?: string
+  periodEndDate?: string
+  grantDate: string
+  grantNumber: string
+  grantType: string
+  grantName: string
+  grantReason: string
+  releaseDate: string
+  sharesVested: number
+  sharesSoldToCover: number
+  sharesHeld: number
+  totalValue: number
+  fairMarketValuePerShare: number
+  saleDate?: string // For sell-to-cover only
+  salePricePerShare?: number
+  saleProceeds?: number
+  sellToCoverAmount: number
+  releaseReferenceNumber: string
+  currency: string
+}
+
 export interface CapitalGainsResult {
   gain: number
   isGain: boolean
@@ -57,6 +80,7 @@ export interface CurrencyConversion {
 export interface ImportedData {
   sales: ShareSaleRecord[]
   vesting: VestingRecord[]
+  rsuReleases: RsuReleaseRecord[]
   lastUpdated: string
 }
 
@@ -67,7 +91,7 @@ export interface CsvParseResult<T> {
   skippedRows: number
 }
 
-export type CsvFileType = 'sales' | 'vesting' | 'unknown'
+export type CsvFileType = 'sales' | 'vesting' | 'rsu-releases' | 'unknown'
 
 export interface CsvParseOptions {
   skipEmptyRows: boolean
