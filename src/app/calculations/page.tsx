@@ -46,7 +46,6 @@ interface CalculationResult {
     totalTaxableIncome: number
     totalCapitalGains: number
     eligibleForDiscount: number
-    thirtyDayRuleSales: number
   }
 }
 
@@ -305,10 +304,6 @@ export default function CalculationsPage() {
       0
     )
 
-    const thirtyDayRuleSales = capitalGainsResults.filter(
-      (result) => result.thirtyDayRule?.applies
-    ).length
-
     return {
       period: effectivePeriod,
       vestingIncome: {
@@ -325,7 +320,6 @@ export default function CalculationsPage() {
         totalTaxableIncome: totalVestingIncome,
         totalCapitalGains,
         eligibleForDiscount,
-        thirtyDayRuleSales,
       },
     }
   }, [data, effectivePeriod])
@@ -483,7 +477,7 @@ export default function CalculationsPage() {
         {calculationResults && (
           <>
             {/* Summary Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
               <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
                 <div className="text-2xl font-bold text-green-600">
                   {formatCurrency(
@@ -507,12 +501,6 @@ export default function CalculationsPage() {
                 <div className="text-sm text-gray-600">
                   CGT Discount Eligible
                 </div>
-              </div>
-              <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-                <div className="text-2xl font-bold text-orange-600">
-                  {calculationResults.summary.thirtyDayRuleSales}
-                </div>
-                <div className="text-sm text-gray-600">30-Day Rule Sales</div>
               </div>
             </div>
 
