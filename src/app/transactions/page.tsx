@@ -2,21 +2,26 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { loadImportedData } from '@/lib/storage'
-import type { ImportedData, ShareSaleRecord, VestingRecord } from '@/types'
+import type {
+  ImportedData,
+  ShareSaleRecord,
+  VestingRecord,
+  RsuReleaseRecord,
+} from '@/types'
 
-type TransactionType = 'all' | 'sales' | 'vesting'
+type TransactionType = 'all' | 'sales' | 'vesting' | 'rsu-releases'
 type SortField = 'date' | 'amount' | 'type' | 'currency'
 type SortDirection = 'asc' | 'desc'
 
 interface CombinedTransaction {
   id: string
-  type: 'sale' | 'vesting'
+  type: 'sale' | 'vesting' | 'rsu-release'
   date: string
   amount: number
   currency: string
   shares: number
   description: string
-  original: ShareSaleRecord | VestingRecord
+  original: ShareSaleRecord | VestingRecord | RsuReleaseRecord
 }
 
 export default function TransactionsPage() {
@@ -64,7 +69,24 @@ export default function TransactionsPage() {
       })
     )
 
-    return [...salesTransactions, ...vestingTransactions]
+    const rsuReleaseTransactions: CombinedTransaction[] = data.rsuReleases.map(
+      (release) => ({
+        id: release.id,
+        type: 'rsu-release' as const,
+        date: release.releaseDate,
+        amount: release.totalValue,
+        currency: release.currency,
+        shares: release.sharesVested,
+        description: `RSU Release of ${release.sharesVested} shares - ${release.grantName}`,
+        original: release,
+      })
+    )
+
+    return [
+      ...salesTransactions,
+      ...vestingTransactions,
+      ...rsuReleaseTransactions,
+    ]
   }, [data])
 
   const filteredAndSortedTransactions = useMemo(() => {
@@ -72,7 +94,15 @@ export default function TransactionsPage() {
 
     // Apply type filter
     if (filter !== 'all') {
-      filtered = filtered.filter((t) => t.type === filter.replace('s', ''))
+      const filterType =
+        filter === 'sales'
+          ? 'sale'
+          : filter === 'vesting'
+            ? 'vesting'
+            : filter === 'rsu-releases'
+              ? 'rsu-release'
+              : filter
+      filtered = filtered.filter((t) => t.type === filterType)
     }
 
     // Apply search filter
@@ -200,7 +230,7 @@ export default function TransactionsPage() {
         </p>
 
         {/* Summary Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
           <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
             <div className="text-2xl font-bold text-blue-600">
               {combinedTransactions.length}
@@ -218,6 +248,12 @@ export default function TransactionsPage() {
               {data?.vesting.length || 0}
             </div>
             <div className="text-sm text-gray-600">Vesting Events</div>
+          </div>
+          <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
+            <div className="text-2xl font-bold text-orange-600">
+              {data?.rsuReleases.length || 0}
+            </div>
+            <div className="text-sm text-gray-600">RSU Releases</div>
           </div>
         </div>
 
@@ -250,6 +286,7 @@ export default function TransactionsPage() {
                   <option value="all">All Transactions</option>
                   <option value="sales">Share Sales</option>
                   <option value="vesting">Vesting Events</option>
+                  <option value="rsu-releases">RSU Releases</option>
                 </select>
               </div>
             </div>
@@ -367,10 +404,16 @@ export default function TransactionsPage() {
                           className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
                             transaction.type === 'sale'
                               ? 'bg-green-100 text-green-800'
-                              : 'bg-purple-100 text-purple-800'
+                              : transaction.type === 'rsu-release'
+                                ? 'bg-orange-100 text-orange-800'
+                                : 'bg-purple-100 text-purple-800'
                           }`}
                         >
-                          {transaction.type === 'sale' ? 'Sale' : 'Vesting'}
+                          {transaction.type === 'sale'
+                            ? 'Sale'
+                            : transaction.type === 'rsu-release'
+                              ? 'RSU Release'
+                              : 'Vesting'}
                         </span>
                       </td>
                       <td className="px-6 py-4 text-sm text-gray-900">
@@ -487,7 +530,10 @@ export default function TransactionsPage() {
                           </label>
                           <div className="text-gray-900">
                             {selectedTransaction.original &&
-                            'salePricePerShare' in selectedTransaction.original
+                            'salePricePerShare' in
+                              selectedTransaction.original &&
+                            selectedTransaction.original.salePricePerShare !==
+                              undefined
                               ? formatCurrency(
                                   selectedTransaction.original
                                     .salePricePerShare,
@@ -559,6 +605,94 @@ export default function TransactionsPage() {
                             {selectedTransaction.original &&
                             'grantType' in selectedTransaction.original
                               ? selectedTransaction.original.grantType
+                              : 'N/A'}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedTransaction.type === 'rsu-release' && (
+                    <div className="border-t pt-4">
+                      <h4 className="font-medium text-gray-900 mb-2">
+                        RSU Release Details
+                      </h4>
+                      <div className="grid grid-cols-2 gap-4 text-sm">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700">
+                            Grant Date
+                          </label>
+                          <div className="text-gray-900">
+                            {selectedTransaction.original &&
+                            'grantDate' in selectedTransaction.original
+                              ? formatDate(
+                                  selectedTransaction.original.grantDate
+                                )
+                              : 'N/A'}
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700">
+                            Grant Number
+                          </label>
+                          <div className="text-gray-900">
+                            {selectedTransaction.original &&
+                            'grantNumber' in selectedTransaction.original
+                              ? selectedTransaction.original.grantNumber
+                              : 'N/A'}
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700">
+                            Fair Market Value Per Share
+                          </label>
+                          <div className="text-gray-900">
+                            {selectedTransaction.original &&
+                            'fairMarketValuePerShare' in
+                              selectedTransaction.original
+                              ? formatCurrency(
+                                  selectedTransaction.original
+                                    .fairMarketValuePerShare,
+                                  selectedTransaction.currency
+                                )
+                              : 'N/A'}
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700">
+                            Total Value
+                          </label>
+                          <div className="text-gray-900">
+                            {selectedTransaction.original &&
+                            'totalValue' in selectedTransaction.original
+                              ? formatCurrency(
+                                  selectedTransaction.original.totalValue,
+                                  selectedTransaction.currency
+                                )
+                              : 'N/A'}
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700">
+                            Shares Held
+                          </label>
+                          <div className="text-gray-900">
+                            {selectedTransaction.original &&
+                            'sharesHeld' in selectedTransaction.original
+                              ? selectedTransaction.original.sharesHeld.toLocaleString()
+                              : 'N/A'}
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700">
+                            Release Reference
+                          </label>
+                          <div className="text-gray-900">
+                            {selectedTransaction.original &&
+                            'releaseReferenceNumber' in
+                              selectedTransaction.original
+                              ? selectedTransaction.original
+                                  .releaseReferenceNumber
                               : 'N/A'}
                           </div>
                         </div>

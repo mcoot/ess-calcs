@@ -5,8 +5,10 @@ import { parseAnyCsv } from '@/lib/csv-parser'
 import {
   addSalesRecords,
   addVestingRecords,
+  addRsuReleaseRecords,
   replaceSalesData,
   replaceVestingData,
+  replaceRsuReleaseData,
   loadImportedData,
 } from '@/lib/storage'
 import type { ImportedData, CsvFileType } from '@/types'
@@ -70,6 +72,19 @@ export function CsvImportComponent({
           replaceVestingData(parseResult.vesting.data)
         } else {
           addVestingRecords(parseResult.vesting.data)
+        }
+      }
+    } else if (parseResult.type === 'rsu-releases' && parseResult.rsuReleases) {
+      result.recordsCount = parseResult.rsuReleases.data.length
+      result.errors = parseResult.rsuReleases.errors
+      result.warnings = parseResult.rsuReleases.warnings
+      result.skippedRows = parseResult.rsuReleases.skippedRows
+
+      if (parseResult.rsuReleases.data.length > 0) {
+        if (replaceMode) {
+          replaceRsuReleaseData(parseResult.rsuReleases.data)
+        } else {
+          addRsuReleaseRecords(parseResult.rsuReleases.data)
         }
       }
     } else {
@@ -219,7 +234,7 @@ export function CsvImportComponent({
                 : 'Drop CSV files here or click to browse'}
             </div>
             <div style={{ fontSize: '0.9rem', color: '#666' }}>
-              Supports both share sales reports and vesting schedule CSVs
+              Supports share sales, vesting schedules, and RSU release CSVs
             </div>
           </div>
         )}
@@ -307,6 +322,12 @@ export function CsvImportComponent({
             <strong>Vesting Schedules:</strong> CSV files containing vesting
             information with columns like &ldquo;Grant Date&rdquo;, &ldquo;Grant
             Number&rdquo;, &ldquo;Vest Date&rdquo;, &ldquo;Shares&rdquo;, etc.
+          </li>
+          <li>
+            <strong>RSU Releases:</strong> CSV files containing actual RSU
+            vesting events with columns like &ldquo;Release Date&rdquo;,
+            &ldquo;Shares Vested&rdquo;, &ldquo;Fair Market Value Per
+            Share&rdquo;, &ldquo;Release Reference Number&rdquo;, etc.
           </li>
         </ul>
         <p>
