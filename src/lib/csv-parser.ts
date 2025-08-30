@@ -209,6 +209,18 @@ export function parseShareSalesCsv(
     return -1
   }
 
+  // Custom function to find the exact "Original Cost Basis" column (not per share)
+  const getOriginalCostBasisTotalIndex = () => {
+    for (let i = 0; i < headers.length; i++) {
+      const header = headers[i].toLowerCase().trim()
+      // Match exact "original cost basis" but not "original cost basis per share"
+      if (header === 'original cost basis') {
+        return i
+      }
+    }
+    return -1
+  }
+
   const indices = {
     periodStartDate: getHeaderIndex(['period start date']),
     periodEndDate: getHeaderIndex(['period end date']),
@@ -224,7 +236,7 @@ export function parseShareSalesCsv(
     originalCostBasisPerShare: getHeaderIndex([
       'original cost basis per share',
     ]),
-    originalCostBasisTotal: getHeaderIndex(['original cost basis']),
+    originalCostBasisTotal: getOriginalCostBasisTotalIndex(),
     sharesSold: getHeaderIndex(['shares sold']),
     saleProceeds: getHeaderIndex(['sale proceeds']),
     salePricePerShare: getHeaderIndex(['sale price per share']),

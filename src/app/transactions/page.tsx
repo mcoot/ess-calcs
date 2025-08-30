@@ -496,6 +496,38 @@ export default function TransactionsPage() {
                               : 'N/A'}
                           </div>
                         </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700">
+                            Cost Basis Per Share
+                          </label>
+                          <div className="text-gray-900">
+                            {selectedTransaction.original &&
+                            'originalCostBasisPerShare' in
+                              selectedTransaction.original
+                              ? formatCurrency(
+                                  selectedTransaction.original
+                                    .originalCostBasisPerShare,
+                                  selectedTransaction.currency
+                                )
+                              : 'N/A'}
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700">
+                            Total Cost Basis
+                          </label>
+                          <div className="text-gray-900">
+                            {selectedTransaction.original &&
+                            'originalCostBasisTotal' in
+                              selectedTransaction.original
+                              ? formatCurrency(
+                                  selectedTransaction.original
+                                    .originalCostBasisTotal,
+                                  selectedTransaction.currency
+                                )
+                              : 'N/A'}
+                          </div>
+                        </div>
                       </div>
                     </div>
                   )}
